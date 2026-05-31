@@ -1,224 +1,83 @@
-# Architecture — App / Coach split, contracts, and the dual learning loop
+# Architecture — `sim_loop/`
 
-How the pieces fit, what the Coach can actually do, and the two processes that
-make it improve. Backed by code: `contracts.py`, `coach_io.py`, `psyche.py`,
-`autoresearch.py`, `sim_loop/autoresearch.py`.
-
----
-
-## 1. How persona models work against the journey *today*
-
-Two engines exist; both treat the Coach as a fixed rule.
-
-**Psyche engine** (the live one — drives demo + autoresearch):
+The whole system is **self-contained in `sim_loop/`**: three roles (persona, widget, coach)
+talking over one session-JSON contract, a turn loop that runs them, a self-improving
+autoresearch loop on the coach, and a converter to distillation data. This doc maps the code;
+the abstract formal model is in the top-level `README.md`, the build journey in `REPORT.md`.
 
 ```
-init_mind(persona) ─▶ Mind{intent, 6 latent vars}
-  for each step:
-    step_dynamics(mind, step)        # latents evolve (price arrives, effort drains)
-    signals = generate_signals(...)  # behaviour proxy emitted
-    action  = decide_action(signals) # ← FIXED rule coach
-    apply_coach_effect(mind, action) # coach mutates the MIND (↑price_readiness…)
-    evaluate_bounce(mind, step)      # hazards combine → bounce reason or advance
+                       ┌──────────────────────── one session-JSON contract ────────────────────────┐
+                       │  per step: { persona_output, coach_decision, shown_coach }                 │
+                       └───────────────────────────────────────────────────────────────────────────┘
+   sim_loop/persona.py ─────────▶  sim_loop/widget.py  ─────────▶  sim_loop/coach.py
+   LLM persona (state              immutable funnel state          coach policy (empty by default);
+   threaded turn→turn)             machine + screen renderer        one json-render effector/widget
+        ▲   reacts to the coach widget shown on the screen   │ effector pre-placed on the next screen
+        └───────────────────────────────────────────────────┘
+                            orchestrated by sim_loop/run.py (the turn loop)
 ```
 
-The persona is a latent `Mind`; the Coach acts *on the mind*, then the outcome is
-re-rolled. Honest, multi-causal. **Limitation:** the Coach is hand-written
-`decide_action`, and it reads `signals` + `persona` directly. That's what we now
-change.
+## The three roles
 
----
-
-## 2. The split: one immutable component, one mutable component
-
-```
-        ┌──────────────────────────────┐   activity log (events)   ┌────────────┐
-        │  APP  — IMMUTABLE             │ ─────────────────────────▶│  COACH     │
-        │  • 11-step form state machine │                           │  MUTABLE   │
-        │  • renders screens (JSON)     │   effector cmd + reasoning │  (trained) │
-        │  • emits Events               │ ◀─────────────────────────│            │
-        │  • executes Effector commands │                           └────────────┘
-        └──────────────────────────────┘
-                    ▲
-                    │ (in simulation) the PERSONA MODEL plays the user:
-                    └── psyche Mind → behaviour → Events
-```
-
-- **APP (never trained).** Fixed surface: the in-scope Privatarzt funnel
-  (`funnel.py` + `scope.py`), a fixed **effector API**, and a JSON renderer. The
-  Streamlit demo and a future React app are two renderers of the same envelopes.
-- **COACH (the only thing we train).** A policy `π(action | observation)`.
-  Input = user **activity log**. Output = one **effector command** (or
-  `NO_ACTION`) + **human-readable reasoning** + **testable hypotheses**.
-- **PERSONA MODEL (the learned simulator).** In simulation it stands in for the
-  real user: `psyche.Mind` → behaviour → Events. It is re-fit from real data in
-  the online loop (§6).
-
-Contracts live in `contracts.py`; the simulation round-trip is proven in
-`coach_io.py` (+ `test_contracts.py`).
-
----
-
-## 3. What the Coach can actually do (capability surface)
-
-Two layers, cleanly separated so we train *intent* against a *fixed* mechanism.
-
-**Effectors** — the APP's fixed mechanical capabilities (`contracts.Effector`):
-
-| Effector | Does | Guardrail |
+| Role | File | What it is |
 |---|---|---|
-| `NO_ACTION` | stay silent | the most-used action; annoyance control |
-| `SHOW_WIDGET` | overlay a coach card (payload = intent + copy) | counts against budget (max 3) |
-| `FOCUS_FIELD` | move focus to a field | passive |
-| `SCROLL_TO` | scroll viewport to an element | passive |
-| `HIGHLIGHT` | emphasise an element | passive |
-| `AUTOFILL` | fill a field with the user's known value | **forbidden** on identity/health/consent (`NEVER_AUTOFILL`) |
-| `FILL_SAMPLE` | fill placeholder data so the user can click through and explore | only on `coverage/insured/tariff` (`SAMPLE_FILLABLE`) |
-| `PRESELECT_TARIFF` | pre-select Start/Optimal (online-completable) | online tariffs only |
-| `SAVE_PROGRESS` | capture email → resume-later / channel handoff | consent-gated |
+| **Persona** `π_P` | `persona.py` + `persona_prompt.py` | LLM. System prompt = `segment.md` + behavioural dials + session instance (set once). Mental state (attention/satisfaction/effort_left/grasp/effort_vs_reward) threaded turn→turn. Emits `events + decision(continue\|leave) + new state + feeling` each step. |
+| **Widget** `W` | `widget.py` + `step_templates.json` | Deterministic funnel state machine + per-step screen renderer (S1→S8). **No LLM.** Injects any coach widget into the screen as `coach_intervention_shown`; advances/terminates. The immutable "app". |
+| **Coach** `π_C` | `coach.py` | LLM policy. Sees only the **filtered** event log (no thoughts/state/persona/health). `EFFECTOR_LIBRARY` = 32 interventions (7 categories × 10 fe_patterns × surfaces). Emits one json-render `command` {effector, fe_pattern, surface, title, body, cta} or `NO_ACTION`. Mode `skip` = the control arm. Policy = the `COACH_SYSTEM` prompt (overridable via `system=`). |
 
-**Intents** — the trainable strategy (`coach.CoachAction`: `price_reframe`,
-`upgrade_explain`, `health_explain`, `form_helper`, `progress_saver`, …). An
-intent is realised through an effector (mostly `SHOW_WIDGET`); `coach_io.INTENT_EFFECTOR`
-maps the two. This is why the action space is both *expressive* and *safe*: the
-app validates every effector command (`EffectorCommand.validate()`) no matter what
-the policy proposes. Detection/“read signals from the user” is implicit: the Coach
-*only* sees the activity log, so reading signals is its whole input.
-
----
-
-## 4. The Coach I/O contract (what we train)
-
-```python
-observe: CoachObservation {           # contracts.CoachObservation
-   session_id, step,
-   activity:  [Event…],               # the user activity log window
-   form_state: {field: filled/valid}, # NO values, NO latent persona/intent
-   budget_remaining: int
-}
-        │  CoachModel.decide(obs)
-        ▼
-CoachDecision {                        # contracts.CoachDecision
-   command:    EffectorCommand,        # the action token we optimise (or NO_ACTION)
-   reasoning:  str,                    # MANDATORY, human-readable
-   hypotheses: [Hypothesis…],          # falsifiable beliefs about the user
-   confidence, value_estimate          # π's predicted P(convert | act)
-}
-```
-
-Key properties:
-- The observation **never** contains the persona label or latent mind — the Coach
-  must *infer* segment/state from behaviour, like in production.
-- `reasoning` is required (auditability + the design ask).
-- `RuleCoachModel` is today's baseline; a learned policy swaps in behind the same
-  `decide(obs) -> CoachDecision` signature with zero downstream change.
-
-### Hypothesis validation (the bridge to learning)
-
-A `Hypothesis` is a falsifiable belief: *claim* (“user is price-shocked”), the
-*latent* it implies (`price_readiness`), a probability `p`, and a **prediction**
-(“if true and we don’t act → ABANDON”). After the journey continues,
-`score_hypotheses()` marks each confirmed/refuted. The hit-rate:
-1. grades the Coach’s **model of the user**, and
-2. is the supervised signal that re-fits the **persona model** in the online loop.
-
----
-
-## 5. JSON-render everything (it’s an app, not a Streamlit toy)
-
-Every object is JSON-serialisable (`test_contracts.py` round-trips them). The
-frontend consumes one message type, `RenderEnvelope{kind, step, spec, hud?}`,
-where `kind ∈ {step_screen, coach_widget, effector, outcome}`. Streamlit renders
-it today; a React app renders the identical JSON tomorrow. The simulation emits
-the same `ActivityLog` + `CoachDecision` JSON a real browser SDK would — so
-“prove it in simulation” and “ship the app” use one contract.
-
----
-
-## 6. The two learning processes
-
-### Loop A — Synthetic autoresearch (runs forever)
+## The turn loop (`run.py`)
 
 ```
-PERSONA MODEL ─▶ APP ─▶ COACH(π) ─▶ outcome ─▶ gate(Δuplift > τ) ─▶ π'
-   (learned simulator)                          (Z3-certified)
+for step in S1..S8:
+    coach.decide(log_so_far, step)            # ANTICIPATORY: pre-place help on THIS screen
+    screen = widget.render(step, state, history, session_instance, intent, coach_injection)
+    persona.step(screen)                      # persona acts + reacts to the widget; may LEAVE
+    classify_outcome(...)                      # convert | advisor_handoff | abandon
 ```
+- **Anticipatory coaching:** the coach is consulted *before* the persona's decision, so a
+  well-timed widget is present *when* the persona decides the step it's about to bounce on
+  (not uselessly on the next screen).
+- **Persona-dependent conversion** (`ρ`, the `SUCCESS` map): Judith = {convert, advisor_handoff},
+  Franz = {convert}, Peter = {advisor_handoff, convert}. The arm summary reports both online
+  `convert_rate` and persona `success_rate`, and the off↔on **uplift**.
+- **Information isolation:** the coach never sees the persona's thoughts, state, feeling, label,
+  or S6 health data — only the observable event log (`filtered_event`).
 
-Model-based RL: the persona model is the learned environment; reward =
-`conversion − annoyance_penalty − intervention_cost`. `autoresearch.py` already
-implements the gated hill-climb; `sim_loop/autoresearch.py` certifies that
-**if** the simulator is faithful (`|U_sim − U_real| ≤ b`, `τ ≥ 2b`) **then** every
-accepted policy is a real improvement, monotone and convergent. This loop is cheap
-and never needs real users — run it on CPU forever (Leonardo `L2`).
+## The two loops
 
-### Loop B — Online feedback (periodic, real data)
+- **Loop A — autoresearch (`autoresearch.py`).** Improves the `COACH_SYSTEM` prompt against the
+  sim: an LLM proposer reads round traces → one targeted constraint → paired A/B vs a shared
+  coach-off control → gate on persona-success uplift (`Δ̂ > incumbent + τ`, annoyance ≤ ceiling)
+  → `ledger.jsonl` + `best_prompt.txt`. (README → "Autoresearch".)
+- **Loop B — re-grounding (design).** Periodically re-fit the persona priors and off-policy-eval
+  the coach on real logs to keep the simulator faithful. The master invariant: *never ship a
+  coach whose synthetic gain isn't backed by a faithful simulator.*
 
-Every batch of real `(activity_log, coach_decision, outcome)` tuples:
+## Distillation bridge (`to_sft.py`)
+
+`to_sft.py` turns recorded sessions into SFT pairs by **replaying the same builders the demo
+uses** — `system = persona_prompt.build_system_prompt(...)`, `user = widget.render(...)`,
+`assistant = the recorded persona_output`. Two variants: **static** (coach-off) and **coached**
+(coach-on). Those pairs feed the LoRA training in `slurm/` (Leonardo). See README → "Distillation".
+
+## The demo (`replay/`)
+
+A Vite + React + TypeScript app that replays the A/B sessions: a faux funnel form with the coach
+**json-rendered overlay** (a lightweight `fe_pattern → component` registry) floating on top —
+deliberately a distinct visual layer from the funnel. Deployed to GitHub Pages.
+
+## Files
 
 ```
-real batch ─┬─▶ (1) RE-FIT persona model    : fit psyche latents/intent-mix so
-            │        synthetic funnel stats match real → shrinks ε (assumption A1)
-            ├─▶ (2) OFF-POLICY EVAL the coach: IPS/counterfactual estimate of the
-            │        live policy on real logs → ground-truth vs synthetic estimate
-            ├─▶ (3) hypothesis hit-rate      : grade + recalibrate the user model
-            └─▶ (4) RE-RUN Loop A on the improved simulator → propose π'
-                     ─▶ Z3 gate ─▶ shadow deploy ─▶ next batch
+sim_loop/
+  run.py                turn loop · classify_outcome · SUCCESS (ρ) · paired A/B summary · CLI
+  widget.py             funnel state machine + screen renderer + coach injection
+  persona.py            LLM persona (state threaded turn→turn)
+  persona_prompt.py     persona system prompt (segment md + dials + session instance)
+  coach.py              coach policy + the 32-effector json-render EFFECTOR_LIBRARY + COACH_SYSTEM
+  autoresearch.py       Loop A: propose coach-prompt edit → simulate → gate → ledger
+  to_sft.py             sessions → SFT pairs (same builders as the demo)
+  llm.py                OpenRouter client (stdlib urllib) + JSON extractor
+  step_templates.json   canonical per-step screens   ·   session_pools.json  session-instance pools
+  replay/               Vite + React + TS demo (coach overlay json-rendered over the funnel)
 ```
-
-Loop B’s entire job is to **keep ε small** so Loop A’s proof stays valid. RL
-framing: Loop A = unlimited synthetic policy improvement under a learned model;
-Loop B = periodic model re-calibration + honest off-policy policy evaluation on
-real traffic. The Z3 certificate is the safety rail between them — a synthetic
-improvement only ships if the simulator it was found on is close enough to reality.
-
-```
-                 cheap, infinite                      expensive, periodic
-        ┌───────────── Loop A ─────────────┐   ┌──────────── Loop B ────────────┐
-        │ persona model → coach → gate → π'│ ◀─│ real data → re-fit persona,     │
-        │ (Z3-certified, runs on CPU 24/7) │   │ off-policy eval, then re-run A  │
-        └──────────────────────────────────┘   └─────────────────────────────────┘
-```
-
----
-
-## 7. Status / what’s real now
-
-- ✅ Contracts (`contracts.py`): events, effectors+guardrails, hypotheses, Coach I/O, render envelope — all JSON round-tripped.
-- ✅ Adapter (`coach_io.py`): psyche signals → activity log → observation → `RuleCoachModel.decide` → decision; hypothesis scoring.
-- ✅ Loop A: `autoresearch.py` (empirical gate `Δuplift > τ`). Formal Z3 certificate **deferred** (`sim_loop/autoresearch.py`).
-- ▢ Loop B: interfaces designed here; `PersonaFit` (re-fit latents) + IPS off-policy eval are the next build. No real data yet → ε estimated from calibration anchors.
-- ▢ Wire `RuleCoachModel` into `journey.run_journey` as the decision source (drop-in for `decide_action`) so the whole sim runs on the contract.
-- ▢ Swap `RuleCoachModel` body for a learned policy (same signature).
-
-93 tests passing.
-
----
-
-## 8. UI design tokens (for the renderer)
-
-Every coach widget is JSON (§5); the renderer styles it with UNIQA's visual
-identity so interventions read as "from UNIQA". Tokens inferred from UNIQA's
-public funnel + brand guidelines.
-
-| Token | Value | Use |
-|---|---|---|
-| `color.primary` | `#0046A0` (UNIQA blue) | Headings, primary CTA, progress fill |
-| `color.primary.dark` | `#002D6A` | Hover/active CTA |
-| `color.accent` | `#E2001A` (UNIQA red) | Urgency, "save" badges, hesitation flag |
-| `color.success` | `#1FA971` | Coverage included, confirmations |
-| `color.warning` | `#F0A028` | "Advisory required" tags, soft alerts |
-| `color.surface` / `.alt` | `#FFFFFF` / `#F4F6FA` | Card bg / page bg |
-| `color.ink` / `.muted` | `#1A1F2C` / `#5C6479` | Body / captions |
-| `color.border` | `#D6DBE5` | Card borders, dividers |
-| `radius.card` / `.pill` | `12px` / `999px` | Cards / badges |
-| `shadow.card` | `0 2px 8px rgba(0,0,0,.06)` | Resting cards |
-| `shadow.elevated` | `0 8px 24px rgba(0,70,160,.12)` | Coach intervention widgets |
-| `font.family` | `"UNIQA Sans", "Inter", system-ui` | Whole product |
-| `font.numeric` | tabular-nums | All price displays |
-
-**Tone of voice:** Sie-form (formal German), concrete numbers first /
-reassurance second, no marketing superlatives (soft proof: "seit 1811",
-"AAA-rated"), Austrian conservatism (disclaimers visible), no emojis, no
-exclamation marks except rare urgency. Brand tone vector (maps to widget `tone`
-props): trustworthy 0.95 · clear 0.90 · austrian 0.85 · digital_forward 0.80 ·
-warm 0.55 · urgency_default 0.20.

@@ -1,0 +1,26 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# UNIQA Conversion Coach — Python dependencies
+#
+# The DEMO ENGINE (sim_loop/: run.py · autoresearch.py · to_sft.py) needs NO
+# third-party packages — it talks to OpenRouter over the stdlib `urllib`.
+# You only need Python 3.11+ and `OPENROUTER_API_KEY` in a .env file.
+# (The interactive demo `sim_loop/replay/` is a Node/Vite app — see its package.json.)
+#
+# The packages below are ONLY for LOCAL fine-tuning / HuggingFace download / eval.
+# On Leonardo these come from pixi.toml instead (CUDA wheels).  `pip install -r requirements.txt`
+# is only needed if you train/evaluate adapters on your own machine.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── local LoRA fine-tuning (same versions as pixi.toml) ──
+torch>=2.3
+transformers>=4.46
+trl>=0.13
+peft>=0.13
+datasets>=3.0
+accelerate>=1.1
+
+# ── download base models from HuggingFace ──
+huggingface_hub>=0.25
+
+# ── optional: legacy research/ probes (persona classifier) ──
+scikit-learn>=1.3

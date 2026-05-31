@@ -66,7 +66,7 @@ Plus **device** (Peter 65% mobile; Franz/Judith desktop-lean), **time-of-day**, 
 seed the persona prior *before any click*.
 
 ### 3.2 Atomic events (trace vocabulary)
-Base (`calculator/contracts.EventType`): `step_enter, mouse_move, hover, pause, idle, scroll,
+Base (`sim_loop/widget.py` event vocabulary): `step_enter, mouse_move, hover, pause, idle, scroll,
 field_focus/blur/edit/invalid, keystroke, tap, select, dropdown_open, tooltip_open,
 validation_error, price_reveal, price_hover, tariff_click, premium_click, nav_back, session_gap,
 tab_blur, tab_focus, cancel_hover, submit, abandon, convert, widget_shown/cta/dismiss`.
@@ -247,7 +247,6 @@ Mobile leans Peter (65% mobile) → favour bottom-sheet callback/WhatsApp + simp
 
 This is the policy the autoresearch loop optimizes against the persona simulator: the persona reacts to
 and **assesses** each widget (helpful/engaging vs distracting); that signal + the realized outcome teach
-the coach which widget works for which persona/pain/device. Demo: build on the React funnel twin
-(`sim_loop/replay/src`) + coach overlay (`sim_loop/replay/src/coachWidgets.tsx`); show the **persona belief + live signal trace**
+the coach which widget works for which persona/pain/device. Demo: build on the replay demo (`sim_loop/replay/src`) + coach overlay (`sim_loop/replay/src/coachWidgets.tsx`); show the **persona belief + live signal trace**
 in a side HUD so judges SEE detection happening; scripted autoplay per persona, each firing a different
-pattern. The gate is **empirical** (`Δuplift > τ`); the formal Z3 certificate is deferred (`deferred/`).
+pattern. The gate is **empirical** (`Δuplift > τ`); the formal Z3 certificate is deferred (deferred).

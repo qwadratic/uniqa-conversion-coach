@@ -1,0 +1,12 @@
+#!/usr/bin/env expect
+# Authenticated SSH that runs a self-refreshing job monitor ON a Leonardo login node.
+# Used by leo_tmux.sh 'watch' (own window). Password from env LEO_PASS.
+set timeout 45
+set opts [split $env(LEO_SSHOPTS) " "]
+# runs the plain remote monitor script (written beforehand by leo_tmux.sh 'watch')
+spawn ssh {*}$opts $env(LEO_USER)@$env(LEO_HOST) {bash $HOME/jobwatch.sh}
+expect {
+  -re {(?i)password:} { send -- "$env(LEO_PASS)\r" }
+  timeout { puts "__LEO_LOGIN_TIMEOUT__"; exit 4 }
+}
+interact

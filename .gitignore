@@ -62,3 +62,12 @@ tests/
 progress.md
 slurm/data*/
 slurm/out*/
+
+# \u2500\u2500\u2500 Superseded docs (old package / psyche / stale plans \u2014 kept on disk) \u2500\u2500\u2500
+docs/PSYCHE_WALKTHROUGH.md
+docs/ROADMAP_FINAL.md
+docs/WIDGET_TWIN_DESIGN.md
+docs/PIPELINE_PLAN.md
+docs/AUTORESEARCH.md
+docs/PERSONA_PLAYBOOK.md
+docs/RESEARCH_insurance_conversion.md

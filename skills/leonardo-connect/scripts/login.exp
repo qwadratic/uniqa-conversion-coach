@@ -1,0 +1,11 @@
+#!/usr/bin/env expect
+# Interactive Leonardo login for a persistent tmux pane. Password from env LEO_PASS.
+set timeout 45
+set opts [split $env(LEO_SSHOPTS) " "]
+spawn ssh {*}$opts $env(LEO_USER)@$env(LEO_HOST)
+expect {
+  -re {(?i)password:} { send -- "$env(LEO_PASS)\r" }
+  -re {(?i)passcode:} { send -- "$env(LEO_PASS)\r" }
+  timeout { puts "__LEO_LOGIN_TIMEOUT__"; exit 4 }
+}
+interact
