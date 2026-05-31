@@ -101,4 +101,90 @@ only if success actually rises.
 | **Proven** | persona↔widget↔coach turn loop · funnel-agnostic coach + 32-effector json-render demo (live) · persona-dependent conversion (ρ) · the per-step K-sampled distillation fix · Judith + Franz LoRA adapters trained from sim_loop's own data · the self-improving autoresearch loop |
 | **Pending (compute only)** | the two-base (≈1B vs ≈1.5B) comparison · the single-tagged-model · scaled autoresearch to ship a winning coach prompt |
 
+---
+
+## Commands — every workflow
+
+The engine (`sim_loop/`) is **pure Python stdlib** — the only requirement is Python 3.11+ and an
+OpenRouter key. The training/HF steps need the `requirements.txt` deps (or `pixi.toml` on Leonardo).
+
+```bash
+# ── setup ──
+python -m venv .venv && source .venv/bin/activate          # Python 3.11+
+echo 'OPENROUTER_API_KEY=sk-or-...' > .env                  # the ONLY thing the demo engine needs
+# pip install -r requirements.txt                           # only for LOCAL fine-tuning / HF download
+```
+
+**1 · The proven A/B (the main demo's engine)** — persona ↔ widget ↔ coach, coach off vs on:
+```bash
+python sim_loop/run.py --sessions 50 --arms off,on --proportions real \
+       --coach-budget 3 --concurrency 12 --out sim_loop/out
+# → sim_loop/out/sessions_coach_{off,on}.jsonl + summary.json
+# prints online-convert AND persona-success uplift (on − off)
+```
+
+**2 · Coach-prompt autoresearch (Loop A)** — self-improve the COACH_SYSTEM prompt:
+```bash
+python sim_loop/autoresearch.py --rounds 6 --sessions 30 --tau 0.025 \
+       --proposer llm --concurrency 8 --out sim_loop/out/autoresearch
+# → ledger.jsonl · best_prompt.txt (paste into sim_loop/coach.py) · report.md
+```
+
+**3 · Interactive replay demo** (Vite + React + TypeScript):
+```bash
+cd sim_loop/replay && npm install
+npm run dev            # local dev server
+npm run build          # static build → dist/  (auto-deployed to GitHub Pages on push)
+# live: https://qwadratic.github.io/uniqa-conversion-coach/
+```
+
+**4 · Generate the persona_v5 dataset** (static = coach-off arm, coached = coach-on arm):
+```bash
+python sim_loop/run.py --sessions 120 --arms off,on --proportions real \
+       --coach-budget 3 --concurrency 16 --out datasets/persona_v5
+```
+
+**5 · Build the SFT (same builders the demo uses) + per-persona shards:**
+```bash
+python sim_loop/to_sft.py                              # reads datasets/persona_v5 → {static,coached}_sft.jsonl
+python slurm/prepare_sft_v5_unified.py --dir datasets/persona_v5 --out slurm/data_v5_unified
+```
+
+**6 · Download a base model from HuggingFace** (on a machine WITH internet):
+```bash
+huggingface-cli download Qwen/Qwen2.5-1.5B-Instruct --local-dir ~/models/qwen2.5-1.5b   # ≈1.5B
+huggingface-cli download openbmb/MiniCPM5-1B        --local-dir ~/models/minicpm-1b     # ≈1B
+```
+
+**7 · Local LoRA fine-tune** (single tagged adapter over all personas, on a GPU box):
+```bash
+pip install -r requirements.txt
+python slurm/train_unified_lora.py --base ~/models/qwen2.5-1.5b \
+       --data slurm/data_v5_unified --out out/qwen_v5 --epochs 3
+```
+
+**8 · Fine-tune on Leonardo HPC** (the cluster path; the connect skill is vendored at
+`skills/leonardo-connect/`):
+```bash
+# connect — SSH via expect, creds from .env (LEONARDO_USERNAME / LEONARDO_PASSWORD):
+bash skills/leonardo-connect/scripts/leo.sh
+
+# transfer — login-node scp is BLOCKED; use the DATAMOVER + $SCRATCH, ABSOLUTE paths:
+tar czf sft.tgz datasets/persona_v5 slurm/data_v5_unified
+scp sft.tgz <user>@dmover1.leonardo.cineca.it:/leonardo_scratch/large/usertrain/<user>/
+#   then on a login node:  tar xzf $SCRATCH/sft.tgz -C ~/zero-one/
+
+# submit (env-driven: BASE / DATA / OUTROOT); partition boost_usr_prod, reservation s_tra_ncc:
+BASE=$HOME/models/qwen2.5-1.5b DATA=$HOME/zero-one/data_sim \
+  sbatch slurm/slurm_persona_sim.sh
+# NEVER `scancel` mid-train (the adapter is saved only at the end — recover from checkpoint-N/).
+# Pre-stage the base weights on a login node (compute nodes have NO internet);
+# PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True, batch ≈48 (100 OOMs on 64GB).
+```
+
+> Full distillation rationale (the collapse → K-sampled fix) and the data-transfer nuances are in
+> the README (“Distillation”) and `docs/REPORT_distillation_collapse.md`.
+
+---
+
 *Built at Zero One Hack, Vienna — synthetic-data-only, no live customer experimentation.*
