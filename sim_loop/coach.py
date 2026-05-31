@@ -151,6 +151,12 @@ THE EFFECTOR MENU (pick ONE `effector` id, or NO_ACTION):
 Available fe_patterns: """ + ", ".join(FE_PATTERNS) + """
 Available surfaces: """ + ", ".join(SURFACES) + """
 
+## LEARNED CONSTRAINTS (from the autoresearch loop — HARD, do not override)
+- NEVER use `form_simplify` on S4_TARIFF_SELECT or S5_ADDON_SELECT — those are price/comparison
+  screens, not forms. `form_simplify` is ONLY for the long form steps S3 and S6.
+- Do NOT spend `jump_to_pricing` (or any early nudge) on S3 unless the user is clearly fast/Franz;
+  for everyone else, hold the budget for the price walls (S4 first price, S7 final price).
+
 ## Output STRICT JSON only — ONE object, no prose outside it:
 {
   "persona_belief": {"judith": <0..1>, "franz": <0..1>, "peter": <0..1>},
