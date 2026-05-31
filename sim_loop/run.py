@@ -1,17 +1,35 @@
-"""Run the persona <-> widget <-> coach loop and generate a dataset.
+"""Run the persona <-> coach loop over a SHARED, append-only EVENT FEED.
 
-Two arms, written to two files:
+Architecture (event-feed refactor):
+  - Shared event feed (append-only list per session). Every event carries a
+    `source` ("user" = persona, "coach" = injected effector).
+  - Persona = a multi-turn event PRODUCER. Each micro-turn:
+      screen = widget.render(..., recent_feed=...)
+      out = persona.turn(screen, feed)    # continuation ∈ {more,advance,leave,convert}
+  - Coach = an async OBSERVER. Called AFTER EVERY persona micro-turn:
+      obs = coach.observe(feed, step)     # returns NO_ACTION | one effector
+    If it acts, the effector is appended to the feed (source=coach) and the
+    persona sees it on its NEXT turn on the same screen.
+  - Orchestrator interleave:
+      render → persona.turn → append events → coach.observe → if acted, append
+      coach event → if continuation=="more": persona acts again on same screen
+      (now seeing the coach injection); on "advance" → next funnel step;
+      "leave"/"convert" → terminate.
+  - Per-screen MICRO-TURN CAP (MAX_MICRO=4) prevents infinite dwell.
+  - Total-turn cap (MAX_TOTAL_TURNS) prevents runaway sessions.
+
+Two output arms:
   sessions_coach_off.jsonl  — coach ALWAYS skips (control)
   sessions_coach_on.jsonl   — coach is active (LLM policy, annoyance budget)
 
-Loop (observe-then-act):
-  session start
-   for step in funnel:
-     widget.render(step, state, history, session_instance, intent, coach_injection)
-     persona.step()            -> events + decision + new state + feeling (may LEAVE)
-     coach.decide(FILTERED log) -> effector | NO_ACTION  (applies to NEXT screen)
-     advance / terminate
-  session end  (convert | abandon | advisor_handoff)
+Session record schema:
+  {
+    persona, arm, session_instance, outcome, n_steps,
+    coach_interventions,
+    feed: [{source, type, step, target, value, t, ...}],  # full event feed
+    micro_turns: [{step, turn_idx, events, continuation, coach_obs}],  # per-turn
+    steps: [...]   # backward-compat steps-shaped view (same as before)
+  }
 
 Usage:
   python sim_loop/run.py --sessions 30 --proportions real --out sim_loop/out
@@ -32,15 +50,13 @@ PERSONAS = ["judith", "franz", "peter"]
 REAL = {"judith": 0.206, "franz": 0.406, "peter": 0.388}
 BALANCED = {"judith": 1 / 3, "franz": 1 / 3, "peter": 1 / 3}
 
+MAX_MICRO = 4          # persona micro-turns per screen before forced advance
+MAX_TOTAL_TURNS = 40   # total micro-turns across the whole session (safety cap)
+
 
 def sample_session_instance(rng: random.Random) -> dict:
     p = POOLS["pools"]
     return {k: rng.choice(v) for k, v in p.items()}
-
-
-def filtered_event(e: dict) -> dict:
-    """Coach-visible view: drop thought; keep observable fields only."""
-    return {k: e.get(k) for k in ("step", "type", "target", "value", "t") if k in e}
 
 
 # Persona-dependent CONVERSION (the formalization's reward ρ): the RIGHT outcome differs by
@@ -79,40 +95,116 @@ def run_session(seg: str, arm: str, model: str, coach_budget: int, seed: int,
     coach = CoachModel(mode=("active" if arm == "on" else "skip"),
                        model=model, budget=coach_budget, system=coach_system,
                        temperature=(coach_temperature if coach_temperature is not None else 0.4))
-    activity_log: list = []
-    steps_rec: list = []
-    outcome = "abandon"
-    step = widget.first_step()
-    while step is not None:
-        # ANTICIPATORY coaching: the coach observes the trajectory SO FAR and may PRE-PLACE one
-        # widget on THIS screen — so a well-timed intervention is present WHEN the persona decides
-        # this step (it can pre-empt the wall it's about to hit), not uselessly on the next screen.
-        coach_dec = coach.decide([filtered_event(e) for e in activity_log if isinstance(e, dict)],
-                                 step=step)
-        coach_injection = coach_dec["command"] if coach_dec.get("_acted") else None
 
-        screen = widget.render(step, persona.state, list(persona.history_brief),
-                               si, persona.initial_intent, coach_injection)
-        out = persona.step(screen)
-        evs = out.get("events", []) or []
-        for e in evs:
-            if isinstance(e, dict):
-                e.setdefault("step", step)
-                activity_log.append(e)
-        decision = out.get("decision", "leave")
+    # ── SHARED APPEND-ONLY EVENT FEED ───────────────────────────────────────
+    feed: list[dict] = []   # every event: source=user|coach, type, step, target, value, t, ...
+
+    # ── OUTPUT STRUCTURES ────────────────────────────────────────────────────
+    steps_rec: list[dict] = []      # backward-compat steps-shaped view
+    micro_turns_rec: list[dict] = []  # per-micro-turn details (new)
+
+    outcome = "abandon"
+    total_turns = 0
+    step = widget.first_step()
+
+    while step is not None and total_turns < MAX_TOTAL_TURNS:
         last = widget.next_step(step) is None
+        shown: dict | None = None        # coach widget currently on this screen (if any)
+        coach_dec_acted: dict | None = None
+        step_events: list[dict] = []
+        step_micro_turns: list[dict] = []
+        continuation = "leave"           # default if cap forces exit
+
+        for turn_idx in range(MAX_MICRO):
+            total_turns += 1
+
+            # ── 1. Render screen with fresh recent feed ──────────────────────
+            recent = feed[-12:]   # last 12 feed events (already contain source)
+            screen = widget.render(
+                step,
+                persona.state,
+                list(persona.history_brief),
+                si,
+                persona.initial_intent,
+                coach_injection=shown,
+                recent_feed=recent,
+            )
+
+            # ── 2. Persona takes one micro-turn ──────────────────────────────
+            out = persona.turn(screen, feed)
+
+            # Stamp each emitted event with step + source=user and push to feed
+            turn_events: list[dict] = []
+            for e in (out.get("events") or []):
+                if isinstance(e, dict):
+                    e.setdefault("step", step)
+                    e.setdefault("source", "user")
+                    feed.append(e)
+                    step_events.append(e)
+                    turn_events.append(e)
+
+            continuation = out.get("continuation", "leave")
+
+            # ── 3. Coach observes the live feed (AFTER persona micro-turn) ───
+            coach_obs: dict | None = None
+            if arm == "on":
+                coach_obs = coach.observe(feed, step=step)
+                if coach_obs.get("_acted"):
+                    coach_dec_acted = coach_obs
+                    shown = coach_obs["command"]
+                    # Append coach effector to feed as source=coach
+                    feed.append({
+                        "source": "coach",
+                        "type": "widget_shown",
+                        "step": step,
+                        "target": coach_obs["command"].get("effector"),
+                        "value": coach_obs["command"].get("effector"),
+                        "t": 0.0,
+                    })
+
+            # Record this micro-turn
+            step_micro_turns.append({
+                "step": step,
+                "turn_idx": turn_idx,
+                "events": turn_events,
+                "continuation": continuation,
+                "coach_obs": coach_obs,
+            })
+            micro_turns_rec.append(step_micro_turns[-1])
+
+            # ── 4. Check continuation ────────────────────────────────────────
+            if continuation != "more":
+                break   # persona COMMITTED: advance / leave / convert
+            # continuation == "more" → persona loops, now seeing any new coach event
+
+        # ── Hit micro-turn cap still undecided → force advance ───────────────
+        if continuation == "more":
+            continuation = "advance"
+
+        out_final = dict(out or {})
+        out_final["events"] = step_events
+        out_final["continuation"] = continuation
+        # backward-compat decision/status fields
+        out_final["decision"] = (
+            "continue" if continuation == "advance"
+            else continuation   # "leave" or "convert"
+        )
+        out_final["status"] = {
+            "advance": "continue", "leave": "leave", "convert": "convert",
+        }.get(continuation, "continue")
 
         steps_rec.append({
             "step": step,
-            "shown_coach": screen.get("coach_intervention_shown"),
-            "persona_output": out,
-            "coach_decision": coach_dec,
+            "shown_coach": shown,
+            "persona_output": out_final,
+            "coach_decision": coach_dec_acted,
         })
 
-        outcome = classify_outcome(decision, out.get("reason", ""), last)
-        if decision == "leave":
+        # ── Session termination logic ────────────────────────────────────────
+        if continuation == "leave":
+            outcome = classify_outcome("leave", out_final.get("reason", ""), last)
             break
-        if last:
+        if continuation == "convert" or last:
             outcome = "convert"
             break
         step = widget.next_step(step)
@@ -124,6 +216,11 @@ def run_session(seg: str, arm: str, model: str, coach_budget: int, seed: int,
         "outcome": outcome,
         "n_steps": len(steps_rec),
         "coach_interventions": coach.used,
+        # ── NEW: full event feed with source ──
+        "feed": feed,
+        # ── NEW: per-micro-turn details ───────
+        "micro_turns": micro_turns_rec,
+        # ── BACKWARD COMPAT: steps-shaped view ─
         "steps": steps_rec,
     }
 
@@ -154,7 +251,7 @@ def main():
 
     summary = {}
     for arm in arms:
-        fname = out_dir / f"sessions_coach_{'off' if arm=='off' else 'on'}.jsonl"
+        fname = out_dir / f"sessions_coach_{'off' if arm == 'off' else 'on'}.jsonl"
         jobs = []
         with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
             for i, seg in enumerate(assign):
@@ -193,7 +290,7 @@ def main():
         ds = summary["on"]["success_rate"] - summary["off"]["success_rate"]
         print(f"\nUPLIFT (on - off): online convert {d:+.3f}  |  persona-success {ds:+.3f}  "
               f"(coach interventions: {summary['on']['coach_interventions']})")
-    print(f"summary -> {out_dir/'summary.json'}")
+    print(f"summary -> {out_dir / 'summary.json'}")
 
 
 if __name__ == "__main__":

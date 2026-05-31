@@ -1,12 +1,44 @@
 """LLM persona — system prompt set once at session start, mental state threaded
-turn to turn. Emits events + decision + new state + feeling each step; terminates
-by emitting decision == "leave" (or by converting at the end of the funnel)."""
+turn to turn.
+
+NEW (event-feed refactor):
+  turn(screen, feed) -> dict with continuation ∈ {more, advance, leave, convert}
+    continuation:
+      "more"    = hesitating/undecided — watch the feed for coach reaction, act again
+      "advance" = proceeding to next funnel screen
+      "leave"   = leaving (abandon or service contact)
+      "convert" = completing purchase (last screen only)
+
+Backward-compat:
+  step(screen) still works; aliases turn(screen).
+
+The persona is NOT locked to one batch per funnel step. It may emit some events
+and set continuation="more" to keep acting on the SAME screen (dwell, hesitate,
+OR react to a coach widget that just appeared on the feed). It reads the recent
+feed via shared_event_feed in the screen (embedded by widget.render each micro-turn).
+"""
 from __future__ import annotations
 import json
 from llm import chat, extract_json
 from persona_prompt import build_system_prompt
 
 STATE_KEYS = ["attention", "satisfaction", "effort_left", "grasp", "effort_vs_reward"]
+
+# Mapping from internal LLM output values to the canonical continuation enum
+_STATUS_TO_CONT = {
+    "acting": "more",       # old value → "more"
+    "more": "more",         # new value
+    "continue": "advance",  # old value → "advance"
+    "advance": "advance",   # new value
+    "leave": "leave",
+    "convert": "convert",
+}
+_CONT_TO_STATUS = {
+    "more": "acting",
+    "advance": "continue",
+    "leave": "leave",
+    "convert": "convert",
+}
 
 
 class LLMPersona:
@@ -21,12 +53,38 @@ class LLMPersona:
         self.temperature = temperature
         self.initial_intent = session_instance.get("visit_goal", "researching")
 
-    def step(self, screen: dict) -> dict:
-        """screen = widget.render(...) user content. Returns parsed persona output."""
+    # ── new public API ─────────────────────────────────────────────────────────
+
+    def turn(self, screen: dict, feed: list | None = None) -> dict:
+        """Event-feed API.
+
+        Parameters
+        ----------
+        screen : rendered screen dict from widget.render() — already carries
+                 shared_event_feed if the orchestrator passed recent_feed.
+        feed   : the raw full event feed (append-only list of dicts). If the
+                 screen was just re-rendered the feed is already embedded; this
+                 parameter lets the persona layer inject truly-just-appended
+                 events (e.g. a coach injection that arrived after render).
+
+        Returns dict with:
+          events        — list of events emitted this turn
+          continuation  — "more" | "advance" | "leave" | "convert"
+          status        — backward-compat alias for continuation (old values)
+          state, feeling, reason, intent, ...
+        """
+        # If feed has events not yet in the screen's shared_event_feed, merge them in.
+        if feed is not None:
+            existing = [e for e in (screen.get("shared_event_feed") or []) if isinstance(e, dict)]
+            extra = [e for e in feed[-12:] if isinstance(e, dict) and e not in existing]
+            if extra:
+                screen = dict(screen)  # shallow copy to avoid mutating
+                screen["shared_event_feed"] = (existing + extra)[-12:]
+
         user = json.dumps(screen, ensure_ascii=False)
-        default = {"events": [], "decision": "leave", "state": dict(self.state),
-                   "feeling": "distracted", "reason": "unparseable",
-                   "intent": self.initial_intent}
+        default = {"events": [], "continuation": "leave", "status": "leave",
+                   "state": dict(self.state), "feeling": "distracted",
+                   "reason": "unparseable", "intent": self.initial_intent}
         try:
             raw = chat([{"role": "system", "content": self.system},
                         {"role": "user", "content": user}],
@@ -36,24 +94,56 @@ class LLMPersona:
                 out = dict(default)
         except Exception:
             out = dict(default)
-        # normalize fields defensively
+
+        # ── normalise continuation / status ───────────────────────────────────
+        # Accept either old (status) or new (continuation) field from the LLM output.
         if not isinstance(out.get("events"), list):
             out["events"] = []
-        if out.get("decision") not in ("continue", "leave"):
-            out["decision"] = "leave"
+
+        raw_cont = out.get("continuation") or out.get("status")
+        cont = _STATUS_TO_CONT.get(str(raw_cont).lower() if raw_cont else "", None)
+        if cont is None:
+            # fallback: a "decision" field from old prompts
+            dec = out.get("decision")
+            cont = _STATUS_TO_CONT.get(str(dec).lower() if dec else "", "leave")
+        out["continuation"] = cont
+        out["status"] = _CONT_TO_STATUS.get(cont, "leave")  # backward compat
+
+        # "decision" field: old-style (continue/leave/convert), None when "more"
+        if cont in ("advance", "continue"):
+            out["decision"] = "continue"
+        elif cont in ("leave", "convert"):
+            out["decision"] = cont
+        else:
+            out["decision"] = None   # "more" = not committed yet
+
+        # ── thread state forward ──────────────────────────────────────────────
         if not isinstance(out.get("state"), dict):
             out["state"] = dict(self.state)
-        # thread state forward
         st = out.get("state", {}) or {}
         new = {}
         for k in STATE_KEYS:
-            try: new[k] = float(st.get(k, self.state.get(k)))
-            except Exception: new[k] = self.state.get(k)
+            try:
+                new[k] = float(st.get(k, self.state.get(k)))
+            except Exception:
+                new[k] = self.state.get(k)
         self.state = new
         out["state"] = new
-        # compact history line for next turn
-        step = screen.get("you_are_on", "?")
-        feel = out.get("feeling", "")
-        dec = out.get("decision", "")
-        self.history_brief.append(f"{step}: {dec}/{feel}")
+
+        # ── history brief: only when persona COMMITS (not on a "more" pause) ──
+        if cont != "more":
+            step = screen.get("you_are_on", "?")
+            feel = out.get("feeling", "")
+            self.history_brief.append(f"{step}: {out['decision'] or cont}/{feel}")
+
         return out
+
+    # ── backward-compat alias ─────────────────────────────────────────────────
+
+    def step(self, screen: dict) -> dict:
+        """Backward-compatible alias for turn(screen, feed=None).
+
+        Returns the same dict as turn(), so callers that read out.get("status")
+        still work via the backward-compat 'status' field.
+        """
+        return self.turn(screen, feed=None)

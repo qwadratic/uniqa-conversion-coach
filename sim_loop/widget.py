@@ -3,6 +3,18 @@
 It is NOT an LLM. It renders the per-step screen the persona perceives (reusing the
 canonical screen templates extracted from datasets/persona_v2), injects any coach
 intervention, and advances the funnel.
+
+NEW (event-feed refactor):
+  render() now accepts `recent_feed` — the last N events from the shared event feed
+  (both user and coach events), embedded in the screen as `shared_event_feed` so
+  the persona can react to coach injections that appeared mid-screen.
+
+  Output schema uses `continuation` ∈ {more, advance, leave, convert} instead of
+  the old `status` field:
+    more    = hesitating / not committed — emit signals, pause, watch the feed
+    advance = proceeding to the next screen
+    leave   = leaving (abandon or service contact)
+    convert = completing purchase (last screen only)
 """
 from __future__ import annotations
 import json, pathlib
@@ -25,10 +37,24 @@ def next_step(step: str):
 
 def render(step: str, running_state: dict, history_brief: list,
            session_instance: dict, initial_intent: str,
-           coach_injection: dict | None = None) -> dict:
-    """Build the user-turn screen JSON the persona model receives."""
+           coach_injection: dict | None = None,
+           recent_feed: list | None = None) -> dict:
+    """Build the user-turn screen JSON the persona model receives.
+
+    Parameters
+    ----------
+    step             : current funnel step key
+    running_state    : persona mental-state dict
+    history_brief    : list of short step summaries so far
+    session_instance : session-level instance vars
+    initial_intent   : the persona's visit goal
+    coach_injection  : optional coach widget command to show on this screen
+    recent_feed      : last ~12 events from the SHARED event feed (source=user|coach),
+                       embedded as shared_event_feed so the persona sees coach injections
+    """
     tpl = TEMPLATES[step]
     screen = json.loads(json.dumps(tpl))  # deep copy
+    screen["you_are_on"] = step
     screen["your_running_state"] = running_state
     screen["history_brief"] = history_brief
     screen["session_instance"] = session_instance
@@ -55,6 +81,33 @@ def render(step: str, running_state: dict, history_brief: list,
         "validation_error/field_clear/text_select/copy when a field or a term frustrates you. "
         "A decisive, satisfied user emits few/none of these and proceeds; only telegraph what you "
         "genuinely feel. Your event trace must SHOW the hesitation building.")
+
+    # ── SHARED EVENT FEED: embed recent events so the persona sees coach injections ──
+    if recent_feed:
+        screen["shared_event_feed"] = recent_feed   # list of {source,type,step,target,value,t,...}
+
+    # ── OUTPUT SCHEMA: continuation field (replaces old "status") ──────────────
+    _osch = screen.get("output_schema")
+    if isinstance(_osch, dict):
+        _osch["continuation"] = (
+            "more | advance | leave | convert — "
+            "'more' = you are HESITATING and have NOT committed yet: emit your pre-dropoff "
+            "signals and PAUSE (a coach helper may then appear on the shared_event_feed and "
+            "you will see it on your NEXT turn on this same screen); "
+            "'advance' = proceeding to the next screen; "
+            "'leave' = you are leaving (frustrated abandon OR service contact); "
+            "'convert' = completing purchase (last screen only). "
+            "A decisive flowing user goes straight to 'advance'; 'more' is for GENUINE hesitation only."
+        )
+        # keep 'status' hint for backward compat with prompts that still emit it
+        _osch["status"] = "(deprecated alias for continuation — prefer 'continuation')"
+
+    screen.setdefault("rules", []).append(
+        "TURN STATUS — you do NOT have to finish the screen in one turn. Decisive / flowing: emit your "
+        "actions and set continuation 'advance' ('convert' only at the final step). Bailing cleanly: 'leave'. "
+        "HESITATING (state degrading, not committed): emit your telegraph signals and set continuation "
+        "'more' to PAUSE — watch the shared_event_feed; on your NEXT turn you will see any new coach "
+        "widget that appeared and can THEN commit. Use 'more' for genuine hesitation, never to stall indefinitely.")
 
     if coach_injection:
         # a coach surface is shown on this screen; persona may engage or dismiss it
