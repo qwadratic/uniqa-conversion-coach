@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'sim_loop/replay/**'
+      - 'uniqa_conversion_coach_deck.pdf'
       - '.github/workflows/deploy-demo.yml'
   workflow_dispatch:
 
@@ -31,6 +32,7 @@ jobs:
           cache: npm
           cache-dependency-path: sim_loop/replay/package-lock.json
       - run: npm ci
+      - run: cp ../../uniqa_conversion_coach_deck.pdf public/uniqa_conversion_coach_deck.pdf
       - run: npm run build
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
