@@ -170,7 +170,7 @@ export default function App() {
         <div className="header-content">
           <div>
             <h1>UNIQA Conversion Coach</h1>
-            <p>An intelligent overlay on top of the insurance calculator that detects the user, watches their behavior, and shows the one right nudge — or stays quiet.</p>
+            <p>Detect and prevent the drop-off moment. Drive conversions with real-time UX adjustment.</p>
           </div>
           <div className="header-contact">
             <span>Ivan Kotelnikov</span>
