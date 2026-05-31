@@ -21,6 +21,8 @@ dist/
 
 # ─── Stray binaries / event handouts ──────────────────────
 *.pdf
+# the pitch deck IS tracked (exception to *.pdf)
+!uniqa_conversion_coach_deck.pdf
 
 # ─── Local-only / off-submission material ───
 # Everything not part of the UNIQA submission lives under _local/ (hidden, never tracked):
