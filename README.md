@@ -289,12 +289,38 @@ LLM agent here can be made local.**
 
 ---
 
+## Setup — Python environment & dependencies
+
+Requires **Python 3.11+**. The demo engine (`sim_loop/`) is **pure standard library** — it needs
+*no* packages, only an OpenRouter API key. The `requirements.txt` packages are for the optional
+local **fine-tuning / HuggingFace** steps (on Leonardo these come from `pixi.toml` instead).
+
+```bash
+# 1) create + activate a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate              # Windows: .venv\Scripts\activate
+
+# 2) install dependencies
+python -m pip install --upgrade pip
+pip install -r requirements.txt        # torch, transformers, trl, peft, datasets, accelerate,
+                                       # huggingface_hub, scikit-learn (only for fine-tuning / HF)
+
+# 3) add your OpenRouter key — the ONLY requirement to run the demo, autoresearch & datagen
+echo 'OPENROUTER_API_KEY=sk-or-...' > .env
+```
+
+The interactive demo (`sim_loop/replay/`) is a separate **Node** app:
+`cd sim_loop/replay && npm install && npm run dev`.
+
+> Just want the demo? Skip step 2 entirely — `sim_loop/` runs on a bare Python 3.11+ with only the
+> `.env` key. `pip install -r requirements.txt` is needed only when you train adapters locally.
+
+---
+
 ## Run it
 
 ```bash
-python -m venv .venv && source .venv/bin/activate          # Python 3.11+
-echo 'OPENROUTER_API_KEY=sk-or-...' > .env                  # the ONLY requirement for the demo engine
-# pip install -r requirements.txt                           # optional — only for LOCAL fine-tuning / HF download
+# (environment set up per “Setup” above — venv active + OPENROUTER_API_KEY in .env)
 
 # proven paired A/B (coach off vs on) — the main demo's own engine
 python sim_loop/run.py --sessions 50 --arms off,on --proportions real --coach-budget 3 --concurrency 12 --out sim_loop/out
