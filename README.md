@@ -69,39 +69,37 @@ space), `sim_loop/persona.py` + `sim_loop/persona_prompt.py` (the persona), `sim
 
 | Symbol | Meaning | Code |
 |---|---|---|
-| **S** | funnel steps `S1…S7` + terminals `{convert, advisor_route, abandon}` | `sim_loop/widget.py` |
-| **E** | event vocabulary (`EventType`) | `sim_loop/run.py` |
-| **A(s)** | closed per-step action space `legal_events(s) × targets(s)` | `sim_loop/widget.py` |
-| **W** | **environment** (immutable): `render(s)→JSON`, `apply(effector)→events`, `outcome()` | `sim_loop/widget.py` |
-| **π_P** | **persona policy** `(s, history, coach_effector?) → Δevents + {continue\|leave}` | `sim_loop/persona.py` · `persona_prompt.py` |
-| **π_C** | **coach policy** `obs → decision` (empty by default; 32-effector json-render) | `sim_loop/coach.py` |
-| **ρ** | **success map** `(outcome, persona) → reward` — persona-dependent | `sim_loop/run.py` |
+| **S** | funnel steps `S1…S8` + terminals `{convert, advisor_handoff, abandon}` | `sim_loop/widget.py` (`STEP_ORDER`) |
+| **E** | per-step legal event vocabulary | `sim_loop/widget.py` (`legal_events`) |
+| **A(s)** | closed per-step action space (the screen's `action_space`) | `sim_loop/widget.py` · `step_templates.json` |
+| **W** | **environment** (immutable): `render(step,…)→screen JSON` (coach widget injected), `next_step` | `sim_loop/widget.py` |
+| **π_P** | **persona policy** `screen → events + {continue\|leave} + new state` | `sim_loop/persona.py` · `persona_prompt.py` |
+| **π_C** | **coach policy** `filtered_log → decision` (empty by default; 32-effector json-render) | `sim_loop/coach.py` |
+| **ρ** | **success map** `(outcome, persona) → reward` — persona-dependent (`SUCCESS`, `classify_outcome`) | `sim_loop/run.py` |
 
-A **session** = a rollout alternating `π_P.step` and `π_C.decide` over `W` until a terminal
-(= `sim.simulate(...)`). The three `@runtime_checkable Protocol`s — `PersonaModel`,
-`WidgetModel`, `CoachModel` — are the only coupling; everything is swappable behind them.
+A **session** = a rollout that orchestrates `coach.decide` → `widget.render` → `persona.step` per
+step until a terminal (`sim_loop/run.py:run_session`). Each role is a plain module — swap the
+LLM persona/coach for a local model behind the same call, the widget for another funnel.
 
-**The turn model (exact).**
+**The turn model (exact, as in `run.py`).**
 ```
-loop until terminal:
-    e_P     = π_P.step(s, history)        # persona acts on the current screen
-    s'      = W.transition(s, e_P)        # widget reacts: advance / change inputs / no-op
-    obs     = W.observe(s', history, budget)
-    d       = π_C.decide(obs)             # coach: NO_ACTION by default, else an effector/widget
-    if d.acts: history += W.apply(d)      # effector mutates the widget AND enters π_P's next prompt
-    # if the persona turn caused NO widget change AND the coach emitted NO effector,
-    # the persona simply takes another turn (multi-turn advance) — that's how it progresses.
+for step in S1..S8:
+    coach_dec = coach.decide(filtered_log, step)     # NO_ACTION by default; else PRE-PLACE one widget
+    screen    = widget.render(step, state, history, session_instance, intent, coach_dec.command?)
+    out       = persona.step(screen)                 # persona acts + reacts to the widget; may LEAVE
+    outcome   = classify_outcome(out.decision, out.reason, last_step)
+    if out.decision == "leave": break                # convert at the last step
 ```
-The coach is conceptually **inside** the widget (its optional reactive layer); the persona
-only ever talks to the surface. The coach runs **after every persona turn** — empty
-(`NO_ACTION`) by default, or it emits one effector/widget. An emitted effector appears in
-the widget response the persona sees next turn and **perturbs the persona's running state**.
+**Anticipatory coaching:** the coach is consulted *before* the persona's decision, so a
+well-timed widget is on the screen *when* the persona decides the step it's about to bounce on.
+It sees only the filtered event log; an emitted effector appears in the next screen and
+**perturbs the persona's running state** (a matched widget can flip leave→continue, a mismatch annoys).
 
-**Reward is persona-dependent:**
+**Reward is persona-dependent** (`run.py` `SUCCESS`):
 ```
-ρ(o, Judith) = 1  if o ∈ {convert_online, advisor_booked}
-ρ(o, Franz)  = 1  if o = convert_online              (advisor = FAILURE)
-ρ(o, Peter)  = 1  if o ∈ {service_contact, callback_booked}
+ρ(o, Judith) = 1  if o ∈ {convert, advisor_handoff}
+ρ(o, Franz)  = 1  if o = convert                       (advisor_handoff = FAILURE)
+ρ(o, Peter)  = 1  if o ∈ {advisor_handoff, convert}    (a service contact = his win)
 ```
 
 ## 2. The widget / intervention space — a typed grammar, never free text
@@ -254,12 +252,13 @@ huggingface-cli download Qwen/Qwen2.5-1.5B-Instruct --local-dir ~/models/qwen2.5
 #    (≈1B base alternative)  huggingface-cli download openbmb/MiniCPM3-1B --local-dir ~/models/minicpm-1b
 
 # 1) GENERATE the fine-tuning dataset from the SAME sim_loop code, then build SFT pairs:
-python sim_loop/run.py --sessions 200 --arms off,on --concurrency 16 --out sim_loop/out
-python sim_loop/to_sft.py                         # → {system,user,assistant} jsonl in slurm/data_sim/
+python sim_loop/run.py --sessions 200 --arms off,on --concurrency 16 --out datasets/persona_v5
+python sim_loop/to_sft.py                         # reads datasets/persona_v5 → {static,coached}_sft.jsonl
+python slurm/prepare_sft_v5_unified.py            # → per-persona train/val shards for the trainer
 
 # 2) TRANSFER to Leonardo — login-node scp is BLOCKED; use the DATAMOVER with ABSOLUTE paths,
 #    and stage big files under $SCRATCH (/leonardo_scratch/large/usertrain/<user>):
-tar czf sft.tgz slurm/data_sim
+tar czf sft.tgz datasets/persona_v5 slurm/data_v5_unified
 scp sft.tgz <user>@dmover1.leonardo.cineca.it:/leonardo_scratch/large/usertrain/<user>/
 #    then, on a login node:  tar xzf $SCRATCH/sft.tgz -C ~/zero-one/
 
@@ -345,6 +344,12 @@ package (`calculator/ coach/ persona/ …`, superseded by `sim_loop/`) are gitig
 > Every doc describes the system as implemented in **`sim_loop/`**. Earlier docs/packages
 > (the first-cut `calculator/`/`coach/`/`persona/` package, `PIPELINE_PLAN`, `ROADMAP_FINAL`,
 > `WIDGET_TWIN_DESIGN`, …) are gitignored — kept on disk, out of the repo.
+
+---
+
+## Authors
+
+Built by **qwadratic** and **Nishank** at Zero One Hack, Vienna. © 2026 — MIT licensed (see [`LICENSE`](LICENSE)).
 
 ---
 

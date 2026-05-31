@@ -1,5 +1,10 @@
 # Plan — Persona distillation v2 (per-step, state-covering, K-sampled)
 
+> **Note.** This is the method writeup for the per-step K-sampled fix. Some scripts it references
+> (e.g. `slurm/show_eval.py`, `research/*`) predate the sim_loop refactor and still import the
+> gitignored legacy package; the **canonical, current** data path is `sim_loop/to_sft.py` (SFT built
+> from the same builders the demo runs). See README → “Distillation”.
+
 Goal: a tiny local persona model whose **emergent S4/S6 churn + conversion match the funnel
 anchors** (ε ≤ 0.12, per-persona conv within tol), distilled from the OpenRouter teacher
 (`gpt-4o-mini`), runnable fast/offline for the coach loop.

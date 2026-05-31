@@ -1,9 +1,13 @@
 # The Coach model — detection, decision & intervention
 
+> **Design vs implemented.** `sim_loop/coach.py` implements the live coach: the detection→decision
+> `COACH_SYSTEM` prompt + the 32-effector `EFFECTOR_LIBRARY` (json-render). The richer signal set
+> and the **cohort-relative baseline** (§3.4) below are the full *design* — not all of it is wired
+> into sim_loop yet (the autoresearch loop, `sim_loop/autoresearch.py`, is how the prompt earns each rule).
+
 The Coach watches the user's **event trace over time** and decides whether to show ONE
-helpful widget, and which. It reasons from **principles, not rigid rules**. Runnable prompt:
-`sim_loop/coach.py` (`build_coach_prompt`); cohort baseline: `sim_loop/coach.py`;
-intervention catalog: `sim_loop/coach.py`. This doc is the *why* — model, signals,
+helpful widget, and which. It reasons from **principles, not rigid rules**. Live policy:
+the `COACH_SYSTEM` prompt + `EFFECTOR_LIBRARY` in `sim_loop/coach.py`. This doc is the *why* — model, signals,
 hypotheses, and the per-screen intervention design.
 
 > Merges the former COACH_MODEL · SIGNALS_AND_DETECTION · HYPOTHESES · COACH_HYPOTHESES ·
