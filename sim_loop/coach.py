@@ -183,6 +183,33 @@ time. If you choose NO_ACTION, set fe_pattern "banner", surface "on_page", title
 target null.""")
 
 
+# ── persona prediction → drives the coaching TYPE ────────────────────────────────
+_FRICTION = {"nav_back", "validation_error", "field_clear", "rage_click", "idle", "pause"}
+_DELIBERATION = {"hover", "tooltip_open", "tab_blur", "external_nav", "slow_mouse", "scroll_up",
+                 "price_hover", "cancel_hover", "compare_return", "text_select", "copy"}
+_FRANZ_EARLY = {"S3_PERSONAL_INFO", "S4_TARIFF_SELECT", "S5_ADDON_SELECT"}
+_HANDOFF = {"advisor_handoff", "callback_offer", "whatsapp_bot", "contact_handoff", "voice_questions"}
+
+
+def predict_persona(filtered_log: list) -> tuple[str, float, dict]:
+    """Cheap persona prediction from the OBSERVABLE log (no labels): fast/clean → franz,
+    friction (re-edits/back-nav/idle) → peter, deliberation (hover/tooltip/compare) → judith.
+    This drives the coaching TYPE — Franz-silence vs proactive Peter-handoff."""
+    if not filtered_log:
+        return "unknown", 0.0, {}
+    types = [str(e.get("type", "")) for e in filtered_log]
+    n = len(types); steps = len(set(e.get("step") for e in filtered_log)) or 1
+    fr = sum(t in _FRICTION for t in types)
+    de = sum(t in _DELIBERATION for t in types)
+    dens = n / steps                                   # events per step (Franz = lean/mechanical)
+    peter = min(1.0, fr / 3.0)
+    judith = min(1.0, de / 3.0)
+    franz = max(0.0, 1.0 - 0.4 * fr - 0.3 * de) * (1.0 if dens <= 4 else 0.6)
+    scores = {"judith": round(judith, 2), "franz": round(franz, 2), "peter": round(peter, 2)}
+    label = max(scores, key=scores.get)
+    return label, scores[label], scores
+
+
 class CoachModel:
     def __init__(self, mode: str = "skip", model: str | None = None,
                  budget: int = 2, temperature: float = 0.4, system: str | None = None):
@@ -203,9 +230,17 @@ class CoachModel:
             return self._noop("control-skip" if self.mode == "skip" else "budget-exhausted")
         if step in self.DETECTION_ONLY:
             return self._noop("detection-only-step")
+        # 1) PREDICT the persona from the observable log — used both as a prompt prior and a gate
+        plabel, pconf, pscores = predict_persona(filtered_log)
         obs = {"current_step": step, "annoyance_budget_left": self.budget - self.used,
                "surfaces_available": SURFACES, "activity_log": filtered_log,
-               "form_state": form_state or {}}
+               "form_state": form_state or {},
+               "predicted_persona": {
+                   "label": plabel, "confidence": pconf, "scores": pscores,
+                   "policy": "franz → stay SILENT through S3-S5 and NEVER hand off to a human — save the "
+                             "budget for the final price (he only drops there); peter → be PROACTIVE with a "
+                             "callback / WhatsApp / contact handoff EARLY (a service contact IS his win); "
+                             "judith → reassure + offer a graceful advisor option."}}
         user = "OBSERVATION (activity log only — decide your move):\n" + json.dumps(obs, ensure_ascii=False)
         try:
             raw = chat([{"role": "system", "content": self.system},
@@ -230,6 +265,18 @@ class CoachModel:
             "cta": cmd.get("cta", "") or "",
             "target": cmd.get("target"),
         }
+        d["predicted_persona"] = plabel
+        # 2) PERSONA-CONDITIONED GATE (leverage the prediction): Franz-silence. Use the stronger of
+        #    the heuristic and the coach's own emitted belief. A predicted-Franz user is NOT
+        #    interrupted on S3-S5 and is NEVER handed off — budget is saved for the final price.
+        belief = d.get("persona_belief") or {}
+        franz_like = max(pscores.get("franz", 0.0), float(belief.get("franz", 0) or 0))
+        if eff != "NO_ACTION" and franz_like >= 0.6 and (step in _FRANZ_EARLY or eff in _HANDOFF):
+            d["command"]["effector"] = "NO_ACTION"
+            d["command"]["title"] = d["command"]["message"] = d["command"]["cta"] = ""
+            d["reasoning"] = f"persona-gate: franz-silence (franz~{franz_like:.2f} @ {step}, suppressed {eff})"
+            d["_acted"] = False
+            return d
         if eff != "NO_ACTION":
             self.used += 1
             d["_acted"] = True
