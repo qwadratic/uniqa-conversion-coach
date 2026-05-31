@@ -33,6 +33,29 @@ def render(step: str, running_state: dict, history_brief: list,
     screen["history_brief"] = history_brief
     screen["session_instance"] = session_instance
     screen["your_initial_intent"] = initial_intent
+
+    # ── PRE-DROPOFF TELEGRAPH: a real user's hesitation is VISIBLE before they leave. Make the
+    #    churn-predictive micro-signals legal on every screen, and require the persona to emit
+    #    them as its state degrades (so the coach has REAL signals to detect, not a silent bail).
+    _asp = screen.setdefault("action_space", {})
+    _legal = _asp.setdefault("legal_event_types", [])
+    for _ev in ("hover", "price_hover", "cancel_hover", "slow_mouse", "nav_back", "scroll_up",
+                "idle", "pause", "tab_blur", "external_nav", "exit_intent", "validation_error",
+                "field_clear", "tooltip_open", "rage_click", "text_select", "copy"):
+        if _ev not in _legal:
+            _legal.append(_ev)
+    screen.setdefault("rules", []).append(
+        "PRE-DROPOFF TELEGRAPH (important): real hesitation is VISIBLE before a user leaves. As your "
+        "state degrades or you lean toward leaving, FIRST emit the observable micro-signals you'd "
+        "actually produce, THEN decide — do NOT abandon silently in one clean step. Pick the 1–3 that "
+        "fit your feeling: dwell/hover on the price or options WITHOUT selecting; price_hover then "
+        "cancel_hover (recoil from the number); nav_back (second-guessing); scroll_up / re-read; "
+        "idle/pause (stalling or distracted); tab_blur/external_nav (leaving to compare); "
+        "exit_intent (cursor darts to the screen edge / tab bar) right before you abandon; "
+        "validation_error/field_clear/text_select/copy when a field or a term frustrates you. "
+        "A decisive, satisfied user emits few/none of these and proceeds; only telegraph what you "
+        "genuinely feel. Your event trace must SHOW the hesitation building.")
+
     if coach_injection:
         # a coach surface is shown on this screen; persona may engage or dismiss it
         screen["coach_intervention_shown"] = {
