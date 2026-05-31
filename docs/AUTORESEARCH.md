@@ -3,7 +3,7 @@
 > **Status: the formal Z3 certificate is DEFERRED.** The autoresearch loop and its
 > **empirical** acceptance gate (`Δuplift > τ` under an annoyance ceiling) are current.
 > The Z3 proof described below (the safety guarantee that `τ ≥ 2b` makes every accepted
-> change a real improvement) is drafted in `deferred/coach_autoimprove_z3.py` and
+> change a real improvement) is drafted in `sim_loop/autoresearch.py` and
 > kept here as design, but is out of scope this round.
 
 > **Thesis.** *When the user model is right, and the experimentation +
@@ -43,12 +43,12 @@ model (Judith / Franz / Peter), and only ship policies that the loop has
 
 | Stage | Component | Where |
 |-------|-----------|-------|
-| Persona model (synthetic data) | `psyche.py` — 6 latent vars, intent mix, hazard-combined bounce | `persona/psyche.py` |
-| Policy vector | `COACH_GAIN` — per-effect gain multiplier (1.0 = calibrated) | `persona/psyche.py` |
-| Experimentation | `propose()` — local ±step perturbation of k gains | `deferred/autoresearch.py` |
-| Evals engine | `evaluate_policy()` — paired A/B on a synthetic cohort via `run_batch` | `deferred/autoresearch.py` |
-| Gate + loop | `autoresearch()` — hill-climb under the acceptance gate | `deferred/autoresearch.py` |
-| **Certificate** | Z3 proof of soundness / monotonicity / termination | `deferred/coach_autoimprove_z3.py` |
+| Persona model (synthetic data) | `psyche.py` — 6 latent vars, intent mix, hazard-combined bounce | `sim_loop/persona.py` |
+| Policy vector | `COACH_GAIN` — per-effect gain multiplier (1.0 = calibrated) | `sim_loop/persona.py` |
+| Experimentation | `propose()` — local ±step perturbation of k gains | `sim_loop/autoresearch.py` |
+| Evals engine | `evaluate_policy()` — paired A/B on a synthetic cohort via `run_batch` | `sim_loop/autoresearch.py` |
+| Gate + loop | `autoresearch()` — hill-climb under the acceptance gate | `sim_loop/autoresearch.py` |
+| **Certificate** | Z3 proof of soundness / monotonicity / termination | `sim_loop/autoresearch.py` |
 
 Run it:
 
@@ -89,7 +89,7 @@ How we keep A1 honest:
 
 ## 4. The certificate (Z3)
 
-`deferred/coach_autoimprove_z3.py` discharges five theorems. Each is proved by
+`sim_loop/autoresearch.py` discharges five theorems. Each is proved by
 asserting the negation and checking it is **UNSAT**.
 
 | # | Theorem | Statement |
@@ -110,7 +110,7 @@ U_real(cand) − U_real(inc)  ≥  (U_sim(cand) − U_sim(inc))  −  2b   >   �
 Run the proof:
 
 ```bash
-python deferred/coach_autoimprove_z3.py     # → ALL THEOREMS DISCHARGED ✅
+python sim_loop/autoresearch.py     # → ALL THEOREMS DISCHARGED ✅
 ```
 
 It is also exercised in CI via `tests/test_autoresearch.py::test_z3_certificate_passes`.

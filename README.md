@@ -58,21 +58,22 @@ The system is a **typed stochastic process**: one immutable environment (the fun
 **two learnable policies** (persona, coach), coupled by a single scalar
 **ε = distance(sim, reality)**. The coach self-improves *fast* against the persona sim
 (Loop A); the persona is kept *faithful* against production (Loop B); **ε is the gate that
-makes Loop A's wins real.** Grounded in `calculator/sim.py` (the three Protocols + loop),
-`calculator/contracts.py` (the JSON contract), `calculator/widget.py` (the env + action
-space), `persona/*`, `coach/*`, `deferred/autoresearch.py` + `deferred/coach_autoimprove_z3.py`.
+makes Loop A's wins real.** The whole system is self-contained in **`sim_loop/`**:
+`sim_loop/run.py` (the turn loop + session JSON), `sim_loop/widget.py` (the funnel env + action
+space), `sim_loop/persona.py` + `sim_loop/persona_prompt.py` (the persona), `sim_loop/coach.py`
+(the coach + the 32-effector json-render library), and `sim_loop/autoresearch.py` (Loop A).
 
 ## 1. One formal object: `⟨ S, E, A, W, π_P, π_C, ρ ⟩`
 
 | Symbol | Meaning | Code |
 |---|---|---|
-| **S** | funnel steps `S1…S7` + terminals `{convert, advisor_route, abandon}` | `calculator/funnel.py` |
-| **E** | event vocabulary (`EventType`) | `calculator/contracts.py` |
-| **A(s)** | closed per-step action space `legal_events(s) × targets(s)` | `calculator/widget.py` |
-| **W** | **environment** (immutable): `render(s)→JSON`, `apply(effector)→events`, `outcome()` | `calculator/widget.py` + `sim.WidgetTwin` |
-| **π_P** | **persona policy** `(s, history, coach_effector?) → Δevents + {continue\|leave}` | `persona/*` |
-| **π_C** | **coach policy** `CoachObservation → CoachDecision` (empty by default) | `coach/*` |
-| **ρ** | **success map** `(outcome, persona) → reward` — persona-dependent | `evaluations/*` |
+| **S** | funnel steps `S1…S7` + terminals `{convert, advisor_route, abandon}` | `sim_loop/widget.py` |
+| **E** | event vocabulary (`EventType`) | `sim_loop/run.py` |
+| **A(s)** | closed per-step action space `legal_events(s) × targets(s)` | `sim_loop/widget.py` |
+| **W** | **environment** (immutable): `render(s)→JSON`, `apply(effector)→events`, `outcome()` | `sim_loop/widget.py` |
+| **π_P** | **persona policy** `(s, history, coach_effector?) → Δevents + {continue\|leave}` | `sim_loop/persona.py` · `persona_prompt.py` |
+| **π_C** | **coach policy** `obs → decision` (empty by default; 32-effector json-render) | `sim_loop/coach.py` |
+| **ρ** | **success map** `(outcome, persona) → reward` — persona-dependent | `sim_loop/run.py` |
 
 A **session** = a rollout alternating `π_P.step` and `π_C.decide` over `W` until a terminal
 (= `sim.simulate(...)`). The three `@runtime_checkable Protocol`s — `PersonaModel`,
@@ -106,7 +107,7 @@ the widget response the persona sees next turn and **perturbs the persona's runn
 ```
 CoachDecision = Surface × Intent × EffectorCommand × Render × Reasoning × Hypotheses
 Surface  ∈ {on_page, email, whatsapp, landing, survey, advisor_booking}
-Intent   ∈ CATALOG (coach/interventions.py)   Effector ∈ {NO_ACTION, SHOW_WIDGET, …}
+Intent   ∈ CATALOG (sim_loop/coach.py)   Effector ∈ {NO_ACTION, SHOW_WIDGET, …}
 ```
 Each **Intent is a typed record** `{id, addresses_pain, serves:{persona→target}, valid_steps,
 valid_surfaces, fe_pattern, intrusiveness, copy_template, render_schema, guardrails}`, so
@@ -159,10 +160,10 @@ gated step: ship only if `U_sim(FT) ≥ U_sim(prompt)`.
 
 1. A typed **`Ledger`** — append-only JSON both loops write per gate decision
    `{θ_C, θ_P, ε, Δ̂_sim, Δ_real(IPS), τ, accepted?}`.
-2. **ε as a first-class artifact** — `evaluations/fidelity.py` computing `φ`, `ε`, auto-`τ`.
-3. **Typed catalog** — `coach/interventions.py` as the `Intervention` record (§2).
+2. **ε as a first-class artifact** — `sim_loop/run.py` computing `φ`, `ε`, auto-`τ`.
+3. **Typed catalog** — `sim_loop/coach.py` as the `Intervention` record (§2).
 4. **`SurfaceModel` Protocol** + `CoachDecision.surface` + shared cross-surface budget.
-5. **IPS off-policy estimator** in `coach/loopb/` — the honest bridge Δ̂_sim → Δ_real.
+5. **IPS off-policy estimator** in `sim_loop/` — the honest bridge Δ̂_sim → Δ_real.
 
 ---
 
@@ -172,29 +173,40 @@ gated step: ship only if `U_sim(FT) ≥ U_sim(prompt)`.
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-pytest -q                                      # full suite (80 tests)
-python -m research.datagen_v2 build --workers 48 --out datasets/persona_v4   # regen persona data (S1–S7)
-python -m deferred.autoresearch --rounds 30    # gated coach self-improvement on the sim
-streamlit run demo/streamlit_app.py            # interactive demo
+# proven paired A/B (coach off vs on) — the main demo's own engine
+python sim_loop/run.py --sessions 50 --arms off,on --proportions real --coach-budget 3 --concurrency 12 --out sim_loop/out
+
+# coach-prompt autoresearch (Loop A): propose → simulate → gate → ledger
+python sim_loop/autoresearch.py --rounds 8 --sessions 20 --tau 0.03 --concurrency 8
+
+# build distillation SFT from the SAME sim_loop code, then LoRA on Leonardo (slurm/)
+python sim_loop/to_sft.py
+
+# interactive replay demo (Vite + React + TS)
+cd sim_loop/replay && npm install && npm run dev
 ```
+Needs `OPENROUTER_API_KEY` in `.env` (persona + coach are LLM-driven). Live demo:
+**https://qwadratic.github.io/uniqa-conversion-coach/**
 
 ## Layout
 
 ```
-calculator/   the App surface — funnel, scope, widget twin, contracts, sim, capture
-coach/        Coach policy — decision prompt, intervention catalog, baseline, adapters
-persona/      persona engine — LLM-driven personas, datagen, latent psyche baseline
-evaluations/  aggregate funnel-stat evals + human-vs-bot comparison
-research/      datagen v2 (per-step, K-sampled), distillation, tuning, probes
-slurm/        Leonardo HPC — LoRA fine-tune + batched eval jobs
-prompts/      hand-scrubbed persona system prompts (+ params)
-demo/         React funnel twin + coach overlay (json-render) · Streamlit app
-tests/        80 tests (calibration, constraints, uplift, guardrails)
-deferred/     parked — Z3 certificate, Monte-Carlo sim, TLM design, autoresearch
-docs/         see below
+sim_loop/                the whole system — self-contained engine + demo
+  run.py                 turn loop: persona ↔ widget ↔ coach (the A/B engine, ρ, success metric)
+  widget.py              immutable funnel state machine + screen renderer (8 steps)
+  persona.py             LLM persona (state threaded turn→turn)
+  persona_prompt.py      persona system prompt (segment md + behavioural dials + session instance)
+  coach.py               coach policy + the 32-effector JSON-RENDER library (detection→decision prompt)
+  autoresearch.py        Loop A: propose coach-prompt variant → simulate → gate → ledger
+  to_sft.py              sim_loop sessions → SFT pairs (the distillation data, same code as the demo)
+  step_templates.json    canonical per-step screens · session_pools.json  session-instance pools
+  replay/                Vite + React + TS demo — the coach overlay JSON-rendered over the funnel
+slurm/                   Leonardo HPC — LoRA fine-tune (Qwen2.5-1.5B) on sim_loop-derived SFT
+prompts/personas/        persona system prompts (+ behavioural dials)
+docs/                    see below
 ```
-Heavy generated data (`datasets/`, `models/`, `slurm/data*`, `slurm/out`) is gitignored —
-regenerate via `research/datagen_v2.py` and the `slurm/` jobs.
+Generated data (`datasets/`, `models/`, `slurm/data*`, `slurm/out`, `sim_loop/out`) and the legacy
+package (`calculator/ coach/ persona/ …`, superseded by `sim_loop/`) are gitignored — kept on disk.
 
 ## Docs
 
@@ -203,10 +215,12 @@ regenerate via `research/datagen_v2.py` and the `slurm/` jobs.
 | [`docs/PIPELINE_PLAN.md`](docs/PIPELINE_PLAN.md) | Master plan: LLM personas, multi-surface coach, prompt autoimprovement, coach 1B fine-tune, outer loop. |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | App/Coach split, the JSON contract, the dual learning loop. |
 | [`docs/COACH_MODEL.md`](docs/COACH_MODEL.md) | The Coach: detection, decision workflow, signals, hypotheses (H1…), per-screen interventions. |
-| [`docs/FUNNEL_AUTOPSY.md`](docs/FUNNEL_AUTOPSY.md) · [`docs/WIDGET_TWIN_DESIGN.md`](docs/WIDGET_TWIN_DESIGN.md) | The real funnel + the React twin/overlay implemented in `demo/`. |
+| [`docs/FUNNEL_AUTOPSY.md`](docs/FUNNEL_AUTOPSY.md) · [`docs/WIDGET_TWIN_DESIGN.md`](docs/WIDGET_TWIN_DESIGN.md) | The real funnel + the React twin/overlay implemented in `sim_loop/replay/`. |
 | [`docs/PERSONA_PLAYBOOK.md`](docs/PERSONA_PLAYBOOK.md) · [`docs/PERSONA_DISTILL_V2_PLAN.md`](docs/PERSONA_DISTILL_V2_PLAN.md) · [`docs/REPORT_distillation_collapse.md`](docs/REPORT_distillation_collapse.md) | Persona behaviour spec, per-step distillation plan, and the v1-collapse → fix writeup. |
-| [`docs/AUTORESEARCH.md`](docs/AUTORESEARCH.md) | The self-improvement loop (empirical gate; formal Z3 certificate deferred). |
-| [`deferred/`](deferred/) | Parked: Z3 certificate, Monte-Carlo sim, local-model + trajectory-model design. |
+| [`docs/AUTORESEARCH.md`](docs/AUTORESEARCH.md) | The self-improvement loop (empirical gate; implemented in `sim_loop/autoresearch.py`). |
+
+> All docs describe the system as implemented in **`sim_loop/`**. The earlier `calculator/`,
+> `coach/`, `persona/`, `deferred/` packages were the first cut and are gitignored (kept on disk).
 
 ---
 

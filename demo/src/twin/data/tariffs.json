@@ -1,6 +1,0 @@
-[
-  { "id": "start",    "name": "Start",     "price": 38.74,  "online": true,  "maxYear": 1400 },
-  { "id": "optimal",  "name": "Optimal",   "price": 68.14,  "online": true,  "maxYear": 2800 },
-  { "id": "opt_plus", "name": "Opt. Plus", "price": 96.66,  "online": false, "maxYear": 4200 },
-  { "id": "premium",  "name": "Premium",   "price": 140.15, "online": false, "maxYear": 8400 }
-]

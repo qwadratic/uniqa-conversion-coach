@@ -16,7 +16,7 @@ agent against — and later the fine-tuned local persona models.
 
 ## 0. Where to record
 
-Capture app: `demo/` (Vite + React). Two surfaces, same `Recorder` / same JSON schema
+Capture app: `sim_loop/replay/` (Vite + React). Two surfaces, same `Recorder` / same JSON schema
 (`contracts.ActivityLog`, every event inside `widget.legal_events(step)`):
 
 - **`?mode=twin`** — the 1-1 funnel twin (recommended; richest, parity-tested action space).

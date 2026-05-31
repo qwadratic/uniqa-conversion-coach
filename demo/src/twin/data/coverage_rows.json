@@ -1,8 +1,0 @@
-[
-  { "id": "hoechstbetrag",  "label": "Höchstbetrag",    "body": "Jährlicher Erstattungshöchstbetrag" },
-  { "id": "arztleistungen", "label": "Arztleistungen",   "body": "Honorare für Fachärzt:innen" },
-  { "id": "medikamente",    "label": "Medikamente",      "body": "Verschreibungspflichtige Medikamente" },
-  { "id": "therapien",      "label": "Therapien",        "body": "Physio / Ergo / Logopädie" },
-  { "id": "hilfsmittel",    "label": "Hilfsmittel",      "body": "Brillen, Orthesen, Hörgeräte" },
-  { "id": "augen_op",       "label": "Augen-OP",         "body": "Refraktive Augenchirurgie" }
-]

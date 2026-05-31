@@ -1,7 +1,7 @@
 # UNIQA Funnel Autopsy — drop-off analysis
 > 2026-05-30 | Drop-off analysis of the funnel. For the **static-widget spec**
 > (canonical screens + action space) see `PIPELINE_PLAN.md` §"the static widget"
-> and `calculator/widget.py`; this doc is the *why-they-leave* analysis.
+> and `sim_loop/widget.py`; this doc is the *why-they-leave* analysis.
 
 ---
 

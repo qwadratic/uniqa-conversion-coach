@@ -114,7 +114,7 @@ $LEO run "cd zero-one && sbatch slurm/slurm_finetune.sh"
 The single most demo-critical piece. Build a small WebSocket bridge that wraps the
 existing rule coach + an OpenRouter LLM coach behind one endpoint the webapp can hit.
 
-**New file: `coach/coach_bridge.py`** (≈120 LOC)
+**New file: `sim_loop/coach.py`** (≈120 LOC)
 
 ```python
 # FastAPI WS server. Listens for activity events from the React Recorder,
@@ -122,13 +122,13 @@ existing rule coach + an OpenRouter LLM coach behind one endpoint the webapp can
 # pushes resulting CoachDecision JSON back over the same socket.
 #
 # Two coach backends, toggle via query param ?backend=rule|llm :
-#   - "rule": existing coach/coach.py decide_action() -> map via coach_io
+#   - "rule": existing sim_loop/coach.py decide_action() -> map via coach_io
 #   - "llm":  OpenRouter gpt-4o-mini with a system prompt embedding
 #             coach.py's hard constraints + COACH_MODIFIERS table (reuse persona_datagen's
 #             OpenRouter call helper for plumbing)
 #
 # Throttle: at most 1 decision per ~2s per session, and respect MESSAGE_BUDGET=3.
-# Output JSON must match demo/src/coach/decisionStream.ts CoachDecision shape
+# Output JSON must match sim_loop/replay/src/coachWidgets.tsx CoachDecision shape
 # (effector + step + target? + payload + render? + reasoning + confidence).
 ```
 
@@ -137,11 +137,11 @@ Concrete steps:
 2. Implement `app = FastAPI()` + `@app.websocket("/coach")` handler.
 3. On each inbound message `{type:"event", event:{...}}` append to an `ActivityLog`, build a `CoachObservation` via `coach_io.observation_from_log`, call the chosen backend, emit `CoachDecision.to_dict()` if non-`NO_ACTION`.
 4. For the LLM backend: hand-craft a tight system prompt (~40 lines) that includes the action space, the Franz-never-advisor rule, Peter-pre-S4 callback rule, and a JSON-only output requirement. Validate the parsed action with `coach.validate_output(action, persona_hint)`.
-5. Reuse the existing 5 demo decision JSONs (`demo/src/coach/decisions/*.json`) as **render templates** — the backend picks the right one by `intent` and merges in dynamic copy. This avoids hand-building json-render specs server-side.
+5. Reuse the existing 5 demo decision JSONs (`sim_loop/replay/src/coachWidgets.tsx*.json`) as **render templates** — the backend picks the right one by `intent` and merges in dynamic copy. This avoids hand-building json-render specs server-side.
 6. Smoke test: `pytest tests/test_coach_bridge.py` — one test, hits the WS, fires a synthetic premium-click event, asserts an `upgrade_explain` decision comes back.
 7. Run: `uvicorn uniqa.coach_bridge:app --port 8765 --reload`.
 
-- Files touched: `coach/coach_bridge.py` (new), `pyproject.toml`, `tests/test_coach_bridge.py` (new, 1 test).
+- Files touched: `sim_loop/coach.py` (new), `pyproject.toml`, `tests/test_coach_bridge.py` (new, 1 test).
 - Acceptance: `wscat -c ws://localhost:8765/coach?persona=franz&backend=rule` returns a decision JSON within 500ms after firing a `premium_click` event.
 
 ---
@@ -151,12 +151,12 @@ Concrete steps:
 Replace the mock stream in the FunnelTwin mode with the live WS, so the existing
 `CoachLayer` renders real decisions. Keep the demo buttons as a fallback.
 
-1. In `demo/src/App.jsx`, `CoachLayerInner`: if `?backend=live` in URL, instantiate `wsStream("ws://localhost:8765/coach?persona=${persona}")` instead of `createLocalMockStream()`. The `wsStream` function already exists in `demo/src/coach/decisionStream.ts` (verified). 
-2. Wire the recorder to **push every event** to the WS, not just subscribe. Add a tiny `emitToBridge(ev)` callback in the Recorder (`demo/src/capture.js`) that the App.jsx hooks up when `?backend=live`.
+1. In `sim_loop/replay/src/App.jsx`, `CoachLayerInner`: if `?backend=live` in URL, instantiate `wsStream("ws://localhost:8765/coach?persona=${persona}")` instead of `createLocalMockStream()`. The `wsStream` function already exists in `sim_loop/replay/src/coachWidgets.tsx` (verified). 
+2. Wire the recorder to **push every event** to the WS, not just subscribe. Add a tiny `emitToBridge(ev)` callback in the Recorder (`sim_loop/replay/src/capture.js`) that the App.jsx hooks up when `?backend=live`.
 3. Add a "Live coach" toggle button next to the existing Demo buttons so the demo operator can switch backends mid-session if the LLM flakes.
 4. Manual smoke: open `http://localhost:5173/?mode=twin&backend=live&persona=franz`, click Premium tariff at S4, see the `upgrade_explain` widget appear from the bridge (not from a button press).
 
-- Files touched: `demo/src/App.jsx` (~30 LOC), `demo/src/capture.js` (~10 LOC), one new "Live" badge in the sidebar.
+- Files touched: `sim_loop/replay/src/App.jsx` (~30 LOC), `sim_loop/replay/src/capture.js` (~10 LOC), one new "Live" badge in the sidebar.
 - Acceptance: live mode produces at least 2 distinct decisions across a Franz S1→S6 walk; rule-mode and llm-mode both work; existing demo buttons still fire correctly.
 
 ---
@@ -165,11 +165,11 @@ Replace the mock stream in the FunnelTwin mode with the live WS, so the existing
 
 So the judge sees *numbers*, not just one widget pop.
 
-1. **Uplift sidebar:** in App.jsx FunnelTwin mode, add a right-rail card showing the **precomputed** Monte-Carlo A/B numbers (`Overall: 5.6% → 14.5%`, per-persona breakdown). Source: run `python -m calculator.journey -n 4000 --json > demo/public/ab_results.json` once and fetch it. *Don't compute live.*
-2. **Persona-autorun mode:** add a "▶ Auto-play as Franz" button that fires a scripted sequence of events (S1 valid → S2 valid → S3 fill → S4 premium_click → wait → S6 hesitate) over ~15 seconds, so a judge sees the coach reacting in real time without manual clicking. Scripts live in `demo/src/twin/data/autoplay.{judith,franz,peter}.ts`. Three scripts, one per persona, ~20 events each, hard-coded delays.
+1. **Uplift sidebar:** in App.jsx FunnelTwin mode, add a right-rail card showing the **precomputed** Monte-Carlo A/B numbers (`Overall: 5.6% → 14.5%`, per-persona breakdown). Source: run `python -m calculator.journey -n 4000 --json > sim_loop/replay/public/ab_results.json` once and fetch it. *Don't compute live.*
+2. **Persona-autorun mode:** add a "▶ Auto-play as Franz" button that fires a scripted sequence of events (S1 valid → S2 valid → S3 fill → S4 premium_click → wait → S6 hesitate) over ~15 seconds, so a judge sees the coach reacting in real time without manual clicking. Scripts live in `sim_loop/replay/src{judith,franz,peter}.ts`. Three scripts, one per persona, ~20 events each, hard-coded delays.
 3. The autoplay is what the operator clicks during the demo: pick persona → autoplay → coach interventions render live → narrate.
 
-- Files touched: `demo/src/App.jsx`, `demo/public/ab_results.json` (new), `demo/src/twin/data/autoplay.*.ts` (new).
+- Files touched: `sim_loop/replay/src/App.jsx`, `sim_loop/replay/public/ab_results.json` (new), `sim_loop/replay/src*.ts` (new).
 - Acceptance: clicking "Auto-play as Franz" with live backend produces ≥2 coach interventions within 15s, the uplift card shows Coach-off vs Coach-on numbers, and the same flow visibly differs for Peter (callback offer before S4) and Judith (graceful advisor option at S6).
 
 ---
@@ -192,20 +192,20 @@ Set an alarm. If T0–T4 ran long, sleep at least 3h — diminishing returns pas
 
 ### T7 — Final A/B + README (08:30–09:15, DEMO, 45m)
 
-1. Re-run `python -m calculator.journey -n 4000 --json > demo/public/ab_results.json` against current code (in case any constant moved).
+1. Re-run `python -m calculator.journey -n 4000 --json > sim_loop/replay/public/ab_results.json` against current code (in case any constant moved).
 2. Update `README.md` "Simulation results" table with the current numbers.
 3. Add a **"Demo" section** at the top: `streamlit run` removed if not used; the *live demo URL* and steps to reproduce (`uvicorn …`, `npm run dev`, browser URL, autoplay flow).
 4. Add a one-paragraph "What the judge sees in 60s" at the top of README.
 5. Sanity: `pytest -q` still green (≤ 80 tests).
 
-- Files touched: `README.md`, `demo/public/ab_results.json`.
+- Files touched: `README.md`, `sim_loop/replay/public/ab_results.json`.
 - Acceptance: README opens with a runnable demo recipe; A/B table reflects current code; tests green.
 
 ---
 
 ### T8 — Screencast fallback (09:15–09:45, DEMO, 30m)
 
-Record a 60–90s screen capture of the live demo: pick Franz → autoplay → coach intervenes → switch to Peter → callback widget → uplift card. Save as `demo/public/demo.mp4`, link from README. **This is the fallback if the live demo flakes during judging.**
+Record a 60–90s screen capture of the live demo: pick Franz → autoplay → coach intervenes → switch to Peter → callback widget → uplift card. Save as `sim_loop/replay/public/demo.mp4`, link from README. **This is the fallback if the live demo flakes during judging.**
 
 ---
 
@@ -254,12 +254,12 @@ Push, tag, fill submission form, send link. Done.
 - ✅ **Self-improvement story:** autoresearch loop + empirical gate, with Z3 explicitly flagged DEFERRED.
 - ✅ **HPC story** (if T6 succeeds): "3 personas distilled to Qwen2.5-1.5B LoRA on CINECA Leonardo, eval ε=X". Otherwise: scaffold present, run pending.
 - ✅ **Tests green**, `pytest -q` reproducible.
-- ✅ **Screencast** (`demo/public/demo.mp4`) linked from README as judging fallback.
+- ✅ **Screencast** (`sim_loop/replay/public/demo.mp4`) linked from README as judging fallback.
 - ✅ **Honest scope:** "Synthetic-data-only validation — no live customer experimentation."
 
 ### Hard gates that must hold at submission
 - `pytest -q` passes.
-- `npm test` in `demo/` passes (parity tests for twin already green per current state).
+- `npm test` in `sim_loop/replay/` passes (parity tests for twin already green per current state).
 - Live demo runs end-to-end at least once on the operator's laptop **before** judging starts.
 - Screencast exists.
 - README's "Quickstart" copy-paste actually works.

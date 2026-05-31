@@ -47,9 +47,18 @@ datasets/
 # Trained sklearn persona-predictor blobs (regenerate via research/train_persona_predictor.py)
 models/
 # Slurm training shards + cluster-produced LoRA adapters
-slurm/data/
-slurm/data_tagged/
-slurm/out/
 
 # sim_loop raw session output (regenerable; the demo copy lives in sim_loop/replay/public/)
 sim_loop/out/
+
+# \u2500\u2500\u2500 Legacy project (superseded by sim_loop/ \u2014 kept on disk, out of the repo) \u2500\u2500\u2500
+calculator/
+coach/
+persona/
+evaluations/
+deferred/
+demo/
+tests/
+progress.md
+slurm/data*/
+slurm/out*/

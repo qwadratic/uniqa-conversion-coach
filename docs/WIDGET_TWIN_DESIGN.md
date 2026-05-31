@@ -3,8 +3,8 @@
 > Drives a 1-1 React twin of the real UNIQA calculator on top of `@json-render/react`,
 > plus a separate **coach overlay** layer that sits on the *untouchable* static funnel
 > (track rule). Both consume the same `contracts.ActivityLog` schema and feed the
-> existing `demo/src/capture.js` recorder, so action-space parity with
-> `calculator/widget.py` is preserved end-to-end.
+> existing `sim_loop/replay/src/capture.js` recorder, so action-space parity with
+> `sim_loop/widget.py` is preserved end-to-end.
 
 ---
 
@@ -57,7 +57,7 @@ The catalog declares **type names + prop types only** (no React code). The regis
 binds these types to React implementations. One entry per Reef component captured
 in `UNIQA_FUNNEL_SPEC.md`.
 
-### 1.1 Catalog declaration — `demo/src/twin/catalog.ts`
+### 1.1 Catalog declaration — `sim_loop/replay/src`
 
 ```ts
 // catalog.ts — typed UI contract (no implementations)
@@ -168,10 +168,10 @@ export type FunnelCatalog = typeof funnelCatalog;
 | `Button[primary]`   | `Weiter`                         | UNIQA blue filled                         |
 | `Button[secondary]` | `Abbrechen` / `Zurück`           | Outline                                   |
 
-### 1.3 Implementation notes (registry — `demo/src/twin/registry.tsx`)
+### 1.3 Implementation notes (registry — `sim_loop/replay/src`)
 
 - Components import the **same `_local/styles.css` UNIQA palette** the current
-  `demo/src/styles.css` already uses.
+  `sim_loop/replay/src/styles.css` already uses.
 - `DatePicker` and `SearchableSelect` apply the Angular-style validation classes
   (`ng-invalid ng-touched` equivalent: `is-invalid is-touched` data attrs) so QA
   tooling and the coach can target them with selectors that mirror the real DOM.
@@ -221,11 +221,11 @@ const initialState = {
 };
 ```
 
-### 2.2 Schema — `demo/src/twin/schema/funnel.json`
+### 2.2 Schema — `sim_loop/replay/src`
 
 The wizard is **5 `Step` elements**, each shown only when `index === currentStepIndex`.
 The `NavRow` is part of each step (Weiter/Zurück per-step config). Static tariff/SV
-data is in `demo/src/twin/data/*.json` and pulled into the schema at build time
+data is in `sim_loop/replay/src*.json` and pulled into the schema at build time
 via a tiny `loadSchema()` helper that does the `$ref` inlining (no runtime fetch).
 
 ```jsonc
@@ -455,7 +455,7 @@ via a tiny `loadSchema()` helper that does the `$ref` inlining (no runtime fetch
 
 ### 2.3 Actions (handlers) and what they emit
 
-Handlers live in `demo/src/twin/registry.tsx`. They mutate the funnel store **and**
+Handlers live in `sim_loop/replay/src`. They mutate the funnel store **and**
 emit ActivityLog events via the injected `Recorder`. See §3 for the exact event map.
 
 ```ts
@@ -527,7 +527,7 @@ actions: {
 }
 ```
 
-### 2.4 Transitions / state machine — `demo/src/twin/transitions.ts`
+### 2.4 Transitions / state machine — `sim_loop/replay/src`
 
 A pure module so it's testable in isolation (matches `widget.py.legal_events`).
 
@@ -626,8 +626,8 @@ export const transitions = {
 
 ## 3. 1-1 action-space mapping (the parity gate)
 
-This table is the **contract** between the React twin and `calculator/widget.py` /
-`contracts.EventType`. CI test (`demo/src/twin/__tests__/parity.test.ts`) asserts
+This table is the **contract** between the React twin and `sim_loop/widget.py` /
+`contracts.EventType`. CI test (`sim_loop/replay/src`) asserts
 the JS action set ⊆ the Python `EventType` vocabulary, and that every event the twin
 emits is in `widget.legal_events(step)` for its step.
 
@@ -660,7 +660,7 @@ emits is in `widget.legal_events(step)` for its step.
 | Coach widget shown / dismissed  | (overlay layer — see §4)          | `widget_shown` / `widget_dismiss`  | base                                       | ✓      |
 | Coach CTA clicked               | (overlay layer)                   | `widget_cta`                       | base                                       | ✓      |
 
-### Parity gaps to fix in `calculator/widget.py` (small, no model retrains)
+### Parity gaps to fix in `sim_loop/widget.py` (small, no model retrains)
 
 1. Add `EventType.FIELD_FOCUS` and `EventType.FIELD_BLUR` to **base** `legal_events`
    (they're already in `contracts.EventType`; just enlarge the base set). This lets
@@ -709,7 +709,7 @@ Effector dispatch (in CoachLayer):
 It enforces the same guardrails as `contracts.EffectorCommand.validate()` and
 re-emits `widget_shown` so the capture log records the intervention.
 
-### 4.2 Coach catalog — `demo/src/coach/catalog.ts`
+### 4.2 Coach catalog — `sim_loop/replay/src/coachWidgets.tsx`
 
 ```ts
 export const coachCatalog = {
@@ -742,7 +742,7 @@ export const coachCatalog = {
 } as const;
 ```
 
-### 4.3 Registry — `demo/src/coach/registry.tsx`
+### 4.3 Registry — `sim_loop/replay/src/coachWidgets.tsx`
 
 Each component is a small focused React file. They all:
 1. Receive their props from the `CoachDecision.command.render` schema.
@@ -763,7 +763,7 @@ actions: {
 }
 ```
 
-### 4.4 Effector bridge — `demo/src/coach/effectorBridge.ts`
+### 4.4 Effector bridge — `sim_loop/replay/src/coachWidgets.tsx`
 
 The only place that can write the funnel store from outside the funnel itself.
 Mirrors `contracts.EffectorCommand.validate()` 1-1.
@@ -814,7 +814,7 @@ export function makeEffectorBridge(funnelStore, recorder) {
 }
 ```
 
-### 4.5 CoachLayer — `demo/src/coach/CoachLayer.tsx`
+### 4.5 CoachLayer — `sim_loop/replay/src/coachWidgets.tsx`
 
 ```tsx
 export function CoachLayer({ stream, funnelStore, recorder }) {
@@ -867,7 +867,7 @@ export function CoachLayer({ stream, funnelStore, recorder }) {
 | `feedback_form`      | `Survey` overlay (3 options)                                        | `widget_cta` (with option), `widget_dismiss`|
 | `advisor_booking`    | Existing UNIQA advisor-booking iframe-style placeholder            | `abandon:advisor_route(booking)` (terminal)|
 
-### 4.7 Decision stream — `demo/src/coach/decisionStream.ts`
+### 4.7 Decision stream — `sim_loop/replay/src/coachWidgets.tsx`
 
 Pluggable source so demo, local dev, and a future Python backend all fit:
 
@@ -898,13 +898,13 @@ plays a few hand-authored decisions (great for showing each effector); tomorrow,
 
 ---
 
-## 5. File plan (`demo/src/`)
+## 5. File plan (`sim_loop/replay/src/`)
 
 > Keep files small and topical. No file should exceed ~200 lines. Each component
 > in `twin/components/` and `coach/components/` is one file; pure & testable.
 
 ```
-demo/src/
+sim_loop/replay/src/
 ├── main.jsx                       (unchanged — mounts <App/>)
 ├── App.jsx                        REWRITE: mounts <FunnelTwin/> + <CoachLayer/>;
 │                                   sidebar persona picker + capture log;
@@ -1034,7 +1034,7 @@ demo/src/
 2. Every Reef component captured in `UNIQA_FUNNEL_SPEC.md` has an explicit catalog
    entry and a small dedicated React file under `twin/components/`.
 3. The action-space mapping table (§3) is the parity contract; only 3 small fixes
-   needed in `calculator/widget.py` (`FIELD_FOCUS`/`FIELD_BLUR`/`SUBMIT` into base
+   needed in `sim_loop/widget.py` (`FIELD_FOCUS`/`FIELD_BLUR`/`SUBMIT` into base
    `legal_events`) — no Python model retrains.
 4. Coach is a **separate `JsonRenderer`** with its own catalog + portal layer
    driven by streamed `CoachDecision` JSON; `EffectorCommand.render` *is* the
@@ -1042,6 +1042,6 @@ demo/src/
 5. `effectorBridge` is the runtime analog of `EffectorCommand.validate()` —
    only place that can write the funnel store from outside, enforcing
    `NEVER_AUTOFILL` / `SAMPLE_FILLABLE` / online-tariffs guardrails.
-6. Concrete file plan (`demo/src/twin/` + `demo/src/coach/`) keeps each
+6. Concrete file plan (`sim_loop/replay/src` + `sim_loop/replay/src/coachWidgets.tsx`) keeps each
    file under ~200 lines, with tests for parity, transitions, and effector
    guards before any UI work lands.
