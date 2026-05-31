@@ -1,9 +1,18 @@
-"""Coach model — observes the FILTERED activity log and decides ONE json-render widget.
+"""Coach model — observes the shared event feed and decides ONE json-render widget.
 
 Two modes:
   - "skip"   : always NO_ACTION, no LLM call (the control arm)
   - "active" : LLM policy; emits {persona_belief, ..., command} where `command` is a
                typed JSON-RENDER widget spec (effector id + fe_pattern + title/body/cta).
+
+NEW (event-feed refactor):
+  observe(feed, step) — called AFTER EVERY persona micro-turn.
+    Takes the raw shared feed (source=user|coach events), filters internally to
+    coach-visible events (drops thought/state/feeling; keeps observable user events +
+    prior coach events), and returns NO_ACTION or ONE effector appended to the feed.
+    The coach does NOT "take the turn"; injecting an event != the turn passing to it.
+
+  decide(filtered_log, step) still works as the lower-level API.
 
 Information isolation: the coach NEVER sees persona thoughts, mental-state vars, feeling,
 persona label, or S6 health data — only the observable event log.
@@ -296,6 +305,40 @@ class CoachModel:
         else:
             d["_acted"] = False
         return d
+
+    # ── new public API ──────────────────────────────────────────────────────────────────
+
+    def observe(self, feed: list, step: str) -> dict:
+        """Event-feed API: called AFTER EVERY persona micro-turn.
+
+        Takes the raw shared feed (source=user|coach events from the whole session so far),
+        filters it to coach-visible events (drops thought/state/feeling; keeps type/target/
+        value/t/step from user events + type/target/value/step from coach events), and
+        returns either NO_ACTION or ONE effector to inject into the feed.
+
+        The coach does NOT "take the turn" — it is an async OBSERVER that may push ONE
+        effector onto the feed that the persona will see on its NEXT turn.
+        """
+        filtered = self._filter_feed(feed)
+        return self.decide(filtered, step)
+
+    @staticmethod
+    def _filter_feed(feed: list) -> list:
+        """Produce the coach-visible view of the event feed.
+
+        Coach sees:
+          - user events: type, step, target, value, t  (NOT thought/state/feeling)
+          - coach events: type, step, target, value, t (already stripped)
+        Private fields (thought, feeling, state, mental_state, reason, source=coach detail)
+        are dropped.
+        """
+        _VISIBLE = {"type", "step", "target", "value", "t", "source"}
+        result = []
+        for e in feed:
+            if not isinstance(e, dict):
+                continue
+            result.append({k: e[k] for k in _VISIBLE if k in e})
+        return result
 
     @staticmethod
     def _noop(why: str) -> dict:
