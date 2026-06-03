@@ -86,28 +86,29 @@ def render(step: str, running_state: dict, history_brief: list,
     if recent_feed:
         screen["shared_event_feed"] = recent_feed   # list of {source,type,step,target,value,t,...}
 
-    # ── OUTPUT SCHEMA: continuation field (replaces old "status") ──────────────
+    # ── OUTPUT SCHEMA: keep training-compatible status field; add continuation as alias ──
     _osch = screen.get("output_schema")
     if isinstance(_osch, dict):
-        _osch["continuation"] = (
-            "more | advance | leave | convert — "
-            "'more' = you are HESITATING and have NOT committed yet: emit your pre-dropoff "
+        # Primary: status field (matches v6 training data vocabulary)
+        _osch["status"] = (
+            "acting | continue | leave | convert — "
+            "'acting' = you are HESITATING and have NOT committed yet: emit your pre-dropoff "
             "signals and PAUSE (a coach helper may then appear on the shared_event_feed and "
             "you will see it on your NEXT turn on this same screen); "
-            "'advance' = proceeding to the next screen; "
+            "'continue' = proceeding to the next screen; "
             "'leave' = you are leaving (frustrated abandon OR service contact); "
             "'convert' = completing purchase (last screen only). "
-            "A decisive flowing user goes straight to 'advance'; 'more' is for GENUINE hesitation only."
+            "A decisive flowing user goes straight to 'continue'; 'acting' is for GENUINE hesitation only."
         )
-        # keep 'status' hint for backward compat with prompts that still emit it
-        _osch["status"] = "(deprecated alias for continuation — prefer 'continuation')"
+        # Alias: continuation field maps to same values for new-format compatibility
+        _osch["continuation"] = "(alias for status — prefer status field)"
 
     screen.setdefault("rules", []).append(
         "TURN STATUS — you do NOT have to finish the screen in one turn. Decisive / flowing: emit your "
-        "actions and set continuation 'advance' ('convert' only at the final step). Bailing cleanly: 'leave'. "
-        "HESITATING (state degrading, not committed): emit your telegraph signals and set continuation "
-        "'more' to PAUSE — watch the shared_event_feed; on your NEXT turn you will see any new coach "
-        "widget that appeared and can THEN commit. Use 'more' for genuine hesitation, never to stall indefinitely.")
+        "actions and set status 'continue' ('convert' only at the final step). Bailing cleanly: 'leave'. "
+        "HESITATING (state degrading, not committed): emit your telegraph signals and set status "
+        "'acting' to PAUSE — watch the shared_event_feed; on your NEXT turn you will see any new coach "
+        "widget that appeared and can THEN commit. Use 'acting' for genuine hesitation, never to stall indefinitely.")
 
     if coach_injection:
         # a coach surface is shown on this screen; persona may engage or dismiss it
