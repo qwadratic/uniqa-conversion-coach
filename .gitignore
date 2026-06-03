@@ -80,6 +80,6 @@ slurm/out_*/
 slurm/out/
 datasets/
 models/
-leonardo/out*/
-leonardo/eval_*.json
+karpathy-experiment/
+leonardo/
 *.ckpt
