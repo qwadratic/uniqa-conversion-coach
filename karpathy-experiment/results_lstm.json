@@ -1,0 +1,60 @@
+{
+  "model": "LSTM",
+  "params_k": 921.2,
+  "d_embd": 64,
+  "d_hidden": 256,
+  "n_layers": 2,
+  "dropout": 0.3,
+  "train_iters": 2000,
+  "train_time_s": 442.8,
+  "best_val_loss": 0.0702,
+  "perplexity": 1.073,
+  "task1_overall": {
+    "top1": 0.9788,
+    "top3": 1.0,
+    "top5": 1.0
+  },
+  "task1_cut_points": {
+    "cut_20": {
+      "top1": 0.9833,
+      "top3": 1.0,
+      "top5": 1.0,
+      "mrr": 0.9917,
+      "n": 120
+    },
+    "cut_40": {
+      "top1": 0.9583,
+      "top3": 1.0,
+      "top5": 1.0,
+      "mrr": 0.9792,
+      "n": 120
+    },
+    "cut_60": {
+      "top1": 0.9917,
+      "top3": 1.0,
+      "top5": 1.0,
+      "mrr": 0.9958,
+      "n": 120
+    },
+    "cut_80": {
+      "top1": 0.9833,
+      "top3": 1.0,
+      "top5": 1.0,
+      "mrr": 0.9917,
+      "n": 120
+    }
+  },
+  "task2_completion": {
+    "cut_60": {
+      "token_accuracy": 0.8343,
+      "n": 50
+    },
+    "cut_80": {
+      "token_accuracy": 0.7666,
+      "n": 50
+    }
+  },
+  "vocab_size": 202,
+  "n_train_seqs": 2160,
+  "n_eval_seqs": 120
+}

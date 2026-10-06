@@ -80,6 +80,7 @@ slurm/out_*/
 slurm/out/
 datasets/
 models/
-karpathy-experiment/
+karpathy-experiment/checkpoints/
+karpathy-experiment/__pycache__/
 leonardo/
 *.ckpt
